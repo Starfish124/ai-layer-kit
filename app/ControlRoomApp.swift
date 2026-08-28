@@ -70,8 +70,8 @@ final class Model: NSObject, ObservableObject, WKNavigationDelegate {
 
     func wachtOpServer(pogingen: Int) {
         guard pogingen > 0 else { status = "server antwoordt niet op :\(PORT)"; return }
-        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(PORT)/meet.json")!)
-        req.timeoutInterval = 0.5
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(PORT)/flow.json")!)
+        req.timeoutInterval = 3
         URLSession.shared.dataTask(with: req) { _, resp, _ in
             Task { @MainActor in
                 if (resp as? HTTPURLResponse)?.statusCode == 200 {
