@@ -12,6 +12,8 @@ Sleutel: ~/.config/ai-layer-kit/xyops.json  { "url": "http://127.0.0.1:5522", "a
 
 import json
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -27,7 +29,10 @@ def api(cfg, naam, body=None):
                                  method="POST" if body is not None else "GET",
                                  headers={"X-API-Key": cfg["api_key"],
                                           "Content-Type": "application/json"})
-    d = json.loads(urllib.request.urlopen(req, timeout=15).read())
+    try:
+        d = json.loads(urllib.request.urlopen(req, timeout=15).read())
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"{naam}: HTTP {e.code} — {e.read().decode(errors='replace')[:400]}")
     if d.get("code") not in (0, "0", None):
         raise SystemExit(f"{naam}: {d.get('code')} — {d.get('description')}")
     return d
@@ -42,30 +47,30 @@ def script(*args):
 EVENTS = [
     dict(title="Controlekamer · meet (elk kwartier)",
          params={"script": script("--run", "--xy")},
-         triggers=[{"type": "interval", "enabled": True, "minutes": 15}],
+         triggers=[{"type": "interval", "enabled": True, "start": int(time.time()), "duration": 900}],
          limits=[{"type": "time", "enabled": True, "duration": 600}]),
     dict(title="Controlekamer · ketens verifiëren (elk uur)",
          params={"script": script("--tally", "ketens_intact") +
                  'test "$(' + " ".join([PY, "controlroom.py", str(MANIFEST), "--tally", "ketens_intact"]) + ')" = "1"\n'},
-         triggers=[{"type": "interval", "enabled": True, "minutes": 60}],
+         triggers=[{"type": "interval", "enabled": True, "start": int(time.time()), "duration": 3600}],
          limits=[{"type": "time", "enabled": True, "duration": 120}]),
     dict(title="Controlekamer · RBAC-sonde (dagelijks 07:00)",
          params={"script": "#!/bin/sh\ncd " + str(Path.home() / "durabo-platform") +
                  "\npwsh -NoProfile -File entra/verify-mailbox-rbac.ps1; rc=$?\n"
                  "# exit 2 = kon niet meten: geen fout, wel zichtbaar\n"
                  "[ $rc -eq 2 ] && { echo '{\"xy\":true,\"warning\":\"sonde niet uitvoerbaar\"}'; exit 0; }\nexit $rc\n"},
-         triggers=[{"type": "schedule", "enabled": True, "hours": [7], "minutes": [0]}],
+         triggers=[{"type": "schedule", "enabled": True, "hours": [7], "minutes": [0], "timezone": "Europe/Amsterdam"}],
          limits=[{"type": "time", "enabled": True, "duration": 300}]),
     dict(title="Controlekamer · export naar Downloads (dagelijks 18:00)",
          params={"script": script("--run", "--export", str(Path.home() / "Downloads"))},
-         triggers=[{"type": "schedule", "enabled": True, "hours": [18], "minutes": [0]}],
+         triggers=[{"type": "schedule", "enabled": True, "hours": [18], "minutes": [0], "timezone": "Europe/Amsterdam"}],
          limits=[{"type": "time", "enabled": True, "duration": 600}]),
 ]
 
 
 def bestaande(cfg):
     """Alle events op titel. Endpointnaam volgens de docs; valt terug op een lege lijst."""
-    for naam in ("get_schedule", "get_events"):
+    for naam in ("get_events",):
         try:
             d = api(cfg, naam)
             rows = d.get("rows") or d.get("events") or d.get("data") or []
