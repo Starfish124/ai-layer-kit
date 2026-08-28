@@ -44,3 +44,20 @@ absolute paden, houdt geen klantdata vast en tekent niets met de hand.
 
 Logs: `~/Library/Logs/controlekamer.log`, `~/Library/Logs/vibe-kanban.log`.
 Herstart na een kit-wijziging: `launchctl kickstart -k gui/$(id -u)/com.stride.controlekamer`.
+
+## xyOps — het ops-vlak (ADR-006)
+
+`~/xyops` (v1.0.94, Node 24 uit Homebrew — Node 26 compileert `better-sqlite3` niet), als
+gebruiker, 127.0.0.1:5522, tailnet-only op `https://mac-mini.tailc91701.ts.net:8446`;
+launchd `com.stride.xyops`, log `~/Library/Logs/xyops.log`. Eerste login `admin`/`admin` →
+**wachtwoord wijzigen**, API-sleutel aanmaken → `~/.config/ai-layer-kit/xyops.json`.
+Dan `python3.12 xyops_setup.py`: vier jobs (meet elk kwartier · ketens elk uur · RBAC-sonde
+07:00 · export 18:00). Elke job is `controlroom.py --xy` of `--tally`: xyOps bewaart en
+alarmeert, de kit meet.
+
+## De stroom (React Flow, ADR-007)
+
+`web/` = Vite + React + `@xyflow/react`; `npm run build` → `web/dist` staat in git, de
+Python-server serveert het op `/flow` zonder Node. Live kleuring komt uit `/events` (SSE,
+`live.py`): agent in een Vibe Kanban-worktree, meting klaar, schakel aan een keten, xyOps-job.
+Posities worden nooit bewaard.
