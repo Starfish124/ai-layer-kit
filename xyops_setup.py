@@ -208,6 +208,91 @@ def stroom_workflow(cfg, er_al):
     print(f"aangemaakt: {STROOM_TITEL} ({len(systemen)} systeemknopen) {d.get('id','')}")
 
 
+TREND_TITEL = "Durabo trendmotor · nu, opkomend, voorspeld"
+TREND_REPO = Path.home() / "durabo-trend-engine"
+# De motor draait onder uv: system python heeft geen pandas, en brew-python mist expat.
+TREND_UV = ("uv run --with pandas --with scikit-learn --with statsmodels "
+            "--with playwright --with open-clip-torch python")
+
+
+def trend_script(*args):
+    return ("#!/bin/sh\nset -e\ncd " + str(TREND_REPO) + "\n" +
+            "export PATH=/opt/homebrew/bin:$PATH\n" + " ".join(args) + "\n")
+
+
+def trend_workflow(cfg, er_al):
+    """De trendmotor als xyOps-workflow.
+
+    De motor zelf is één proces (verzamelen → signaal → ontdekking → forecast);
+    die valt niet in knopen te knippen zonder hem te herschrijven, dus dat is één
+    knoop en dat zegt de kaart ook. Wat er ná die knoop hangt zijn drie *beelden*
+    op dezelfde meting: wat draait nu, wat komt op, wat voorspelt hij. Drie
+    knopen omdat het drie vragen zijn, één meting omdat het één waarheid is.
+
+    De conditieknoop draait eerst en apart: hij zegt of de feed vers genoeg is om
+    iets over te beweren. Een dashboard dat een feed van gisteren als 'nu'
+    presenteert is erger dan een leeg dashboard.
+    """
+    nodes = [
+        {"id": "ntrigman", "type": "trigger", "x": 40, "y": 300},
+        {"id": "ntrigcyc", "type": "trigger", "x": 40, "y": 420},
+        {"id": "nnote", "type": "note", "x": 20, "y": 20, "data": {"wide": True, "body":
+            "**Vier lagen, één meting, drie vragen.**\n\n"
+            "`verzamelen` haalt reddit + tiktok op, rekent reeksen (volume, snelheid, "
+            "versnelling), vangt uitschieters en extrapoleert. De drie beelden erna zijn "
+            "sorteringen van diezelfde feed — geen losse berekeningen.\n\n"
+            "De forecast is een extrapolatie met een eindige horizon, geen orakel. "
+            "`groeiverhouding` is piek ÷ venstergemiddelde, niet 'zo veel keer nu'."}},
+        {"id": "nrun", "type": "job", "x": 330, "y": 360,
+         "data": {"label": "Verzamelen + rekenen (reddit, tiktok, CLIP, forecast)", "icon": "",
+                  "category": "general", "targets": ["main"], "algo": "random",
+                  "plugin": "shellplug",
+                  "params": {"script": trend_script(TREND_UV, "pipeline.py", "--collect",
+                                                    "--collect-tiktok", "--bucket", "6h"),
+                             "annotate": False}}},
+    ]
+    conns = [{"id": "ctm", "source": "ntrigman", "dest": "nrun"},
+             {"id": "ctc", "source": "ntrigcyc", "dest": "nrun"}]
+
+    beelden = [("nconditie", "Conditie · is de feed vers?", "conditie", 120),
+               ("nnu", "Trending nu · gemeten engagement", "nu", 260),
+               ("nop", "Komt op · vroeg gevangen", "stijgers", 400),
+               ("ntoekomst", "Voorspeld · piek binnen de horizon", "toekomst", 540)]
+    for nid, label, beeld, y in beelden:
+        nodes.append({"id": nid, "type": "job", "x": 720, "y": y,
+                      "data": {"label": label, "icon": "", "category": "general",
+                               "targets": ["main"], "algo": "random", "plugin": "shellplug",
+                               "params": {"script": trend_script("python3.12", "xy_report.py", beeld),
+                                          "annotate": False}}})
+        # alleen na een geslaagde run: een beeld op een mislukte cyclus is een leugen
+        conns.append({"id": f"cr{nid}", "source": "nrun", "dest": nid, "condition": "success"})
+        conns.append({"id": f"cj{nid}", "source": nid, "dest": "njoin", "condition": "complete"})
+
+    nodes.append({"id": "njoin", "type": "controller", "x": 1090, "y": 360,
+                  "data": {"controller": "join"}})
+    nodes.append({"id": "ninzicht", "type": "job", "x": 1360, "y": 360,
+                  "data": {"label": "Inzichten (lokaal model leest de cijfers)", "icon": "",
+                           "category": "general", "targets": ["main"], "algo": "random",
+                           "plugin": "shellplug",
+                           "params": {"script": trend_script(
+                               "cat data/insights_latest.md 2>/dev/null || "
+                               "echo 'geen insights (ollama uit?)'"), "annotate": True}}})
+    conns.append({"id": "cs", "source": "njoin", "dest": "ninzicht"})
+
+    body = {"title": TREND_TITEL, "type": "workflow", "enabled": True, "category": "general",
+            "targets": ["main"], "algo": "random",
+            "triggers": [{"id": "ntrigman", "type": "manual", "enabled": True},
+                         {"id": "ntrigcyc", "type": "schedule", "enabled": True,
+                          "hours": [2, 8, 14, 20], "minutes": [40],
+                          "timezone": "Europe/Amsterdam"}],
+            "workflow": {"nodes": nodes, "connections": conns},
+            "limits": [{"type": "time", "enabled": True, "duration": 3600}]}
+    if TREND_TITEL in er_al:
+        api(cfg, "delete_event", {"id": er_al[TREND_TITEL]["id"]})
+    d = api(cfg, "create_event", body)
+    print(f"(her)aangemaakt: {TREND_TITEL} ({len(nodes)} knopen) {d.get('id','')}")
+
+
 def main():
     if not CFG.exists():
         sys.exit(f"geen {CFG} — maak eerst een API-sleutel aan in xyOps")
@@ -228,6 +313,7 @@ def main():
             print("aangemaakt:", ev["title"], d.get("id", ""))
     workflow(cfg, bestaande(cfg))
     stroom_workflow(cfg, bestaande(cfg))
+    trend_workflow(cfg, bestaande(cfg))
 
 
 if __name__ == "__main__":
