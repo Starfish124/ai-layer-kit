@@ -8,6 +8,12 @@ Eén pagina die **meet** hoe een AI-laag om een Microsoft-omgeving heen ervoor s
   een netwerk-import, permissies in Entra-scripts die niemand claimt)
 - **Tests en ketens** — elke `test_*.py` in elke repo met zijn laatste regel; de hash-ketens
 - **Beslissingen** — de ADR-koppen uit `ARCHITECTURE.md`; het enige dat met de hand is geschreven
+- **Stroom** (`/flow`) — een werkstroom-canvas zoals n8n: bronnen → systemen → uitvoer uit
+  `layers.json`; dubbelklik een systeem en je ziet zijn echte functies en regeltabellen als
+  blokken met pijlen voor elke aanroep (`ast`), klik een blok voor de code. Niets is geplaatst.
+
+**Mac-app:** `app/build.sh` bouwt `Controlekamer.app` (SwiftUI + WKWebView, geen Xcode-project);
+de app start de server zelf per project uit `~/.config/ai-layer-kit/projects.json`.
 
 Python 3.12, alleen standaardbibliotheek. Nederlandse UI.
 

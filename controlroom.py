@@ -15,6 +15,7 @@ from html import escape as esc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+import flow
 import meet
 
 PORT = 7415   # vrij van 7350/7360/7411/7455/8420/8765/8766
@@ -252,6 +253,123 @@ def html(m):
                                 "systemen_totaal", "grenzen_rood", "beslissingen")})
 
 
+# ── de stroom: het canvas ─────────────────────────────────────────────────────
+# Alle data komt uit /flow.json (flow.py). De JS hier legt alleen neer wat hij
+# krijgt: kolom = laag, rij = rij. Klik = code in het paneel; dubbelklik op een
+# systeem = naar binnen. Geen bibliotheek, geen sleepbare knopen — posities zijn
+# geen waarheid, dus ze worden ook niet bewaard.
+
+FLOW_PAGE = """<!doctype html>
+<html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stroom</title>
+<style>
+  :root { --teal:#009b8f; --teal-deep:#007c72; --teal-tint:#e3f4f2; --blue:#255fa9; --blue-tint:#e9eff8;
+          --warn:#b97b17; --warn-tint:#fdf5e3; --good:#1d7d43; --paper:#f2f5f7; --card:#fff;
+          --ink:#10131a; --ink-2:#3d4453; --mute:#79808f; --faint:#a5abb8; --line:#e3e7ee;
+          --sans:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;
+          --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  * { box-sizing: border-box; }
+  body { margin:0; height:100vh; display:grid; grid-template-rows:auto 1fr; grid-template-columns:1fr 440px;
+         background:var(--paper); color:var(--ink); font:14px/1.5 var(--sans); overflow:hidden; }
+  header { grid-column:1/3; display:flex; gap:14px; align-items:baseline; padding:10px 16px;
+           border-bottom:1px solid var(--line); background:var(--card); }
+  header .eyebrow { font:12px var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--teal-deep); }
+  header b { font-size:16px; }
+  header a { font:12px var(--mono); color:var(--blue); cursor:pointer; }
+  header .hint { margin-left:auto; font:12px var(--mono); color:var(--mute); }
+  #canvas { overflow:hidden; cursor:grab; position:relative; }
+  #canvas:active { cursor:grabbing; }
+  svg { width:100%; height:100%; }
+  .knoop rect { fill:var(--card); stroke:var(--line); stroke-width:1; rx:10; }
+  .knoop.bron rect { stroke:var(--faint); stroke-dasharray:4 3; }
+  .knoop.systeem rect { stroke:var(--teal); stroke-width:1.5; }
+  .knoop.systeem.niet rect { stroke:var(--faint); fill:var(--paper); }
+  .knoop.uitvoer rect { stroke:var(--good); }
+  .knoop.data rect { stroke:var(--warn); fill:var(--warn-tint); }
+  .knoop.functie rect { stroke:var(--blue); }
+  .knoop.gekozen rect { stroke-width:3; }
+  .knoop text { font:600 12px var(--sans); fill:var(--ink); pointer-events:none; }
+  .knoop text.doc { font:10px var(--mono); fill:var(--mute); font-weight:400; }
+  .knoop text.soort { font:9px var(--mono); fill:var(--faint); letter-spacing:.08em; text-transform:uppercase; }
+  .pijl { fill:none; stroke:var(--faint); stroke-width:1.4; marker-end:url(#punt); }
+  aside { border-left:1px solid var(--line); background:var(--card); overflow:auto; padding:14px 16px; }
+  aside h3 { margin:0 0 2px; font:700 14px var(--mono); }
+  aside .meta { font:11px var(--mono); color:var(--mute); margin-bottom:10px; }
+  aside pre { margin:0; font:11.5px/1.5 var(--mono); white-space:pre-wrap; word-break:break-word;
+              background:var(--paper); padding:12px; border-radius:10px; }
+  aside dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; font-size:13px; }
+  aside dt { font:11px var(--mono); color:var(--mute); text-transform:uppercase; letter-spacing:.06em; }
+  aside dd { margin:0; }
+  aside .leeg { color:var(--mute); font-size:13px; }
+</style></head>
+<body>
+<header><span class="eyebrow">Stroom</span><b id="titel"></b><a id="terug" hidden>← overzicht</a>
+  <span class="hint">klik = code · dubbelklik systeem = naar binnen · sleep = pannen · scroll = zoom</span></header>
+<div id="canvas"><svg id="svg"><defs>
+  <marker id="punt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0L10 5L0 10z" fill="#a5abb8"/></marker></defs><g id="wereld"></g></svg></div>
+<aside id="paneel"><p class="leeg">Klik op een blok.</p></aside>
+<script>
+const W=210, H=58, GX=90, GY=16, PAD=30;
+const svg=document.getElementById('svg'), wereld=document.getElementById('wereld');
+const paneel=document.getElementById('paneel'), titel=document.getElementById('titel'), terug=document.getElementById('terug');
+let view={x:0,y:0,k:1}, data=null, gekozen=null;
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function pos(n){ return {x:PAD+n.laag*(W+GX), y:PAD+n.rij*(H+GY)}; }
+function knip(s,n){ s=String(s??''); return s.length>n? s.slice(0,n-1)+'…': s; }
+function teken(){
+  const by={}; data.nodes.forEach(n=>by[n.id]=n);
+  let h='';
+  for(const [a,b] of data.edges){ const A=pos(by[a]),B=pos(by[b]); if(!by[a]||!by[b]) continue;
+    // in het overzicht stroomt data van bron (links) naar systeem; binnen een systeem
+    // roept links-hoog rechts-laag aan, dus de pijl loopt van aanroeper naar aangeroepene
+    const van=A.x<B.x? {x:A.x+W,y:A.y+H/2}:{x:A.x,y:A.y+H/2};
+    const naar=A.x<B.x? {x:B.x,y:B.y+H/2}:{x:B.x+W,y:B.y+H/2};
+    const dx=(naar.x-van.x)/2;
+    h+=`<path class="pijl" d="M${van.x} ${van.y} C${van.x+dx} ${van.y} ${naar.x-dx} ${naar.y} ${naar.x} ${naar.y}"/>`; }
+  for(const n of data.nodes){ const p=pos(n);
+    const kl=['knoop',n.soort, n.soort==='systeem'&&!n.gebouwd?'niet':'', n.id===gekozen?'gekozen':''].join(' ');
+    h+=`<g class="${kl}" data-id="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect width="${W}" height="${H}"/>
+      <text x="12" y="16" class="soort">${esc(n.soort)}</text>
+      <text x="12" y="33">${esc(knip(n.naam,30))}</text>
+      <text x="12" y="48" class="doc">${esc(knip(n.doc,36))}</text></g>`; }
+  wereld.innerHTML=h;
+  wereld.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`);
+  wereld.querySelectorAll('.knoop').forEach(g=>{
+    g.addEventListener('click',e=>{ gekozen=g.dataset.id; toon(by[gekozen]); teken(); });
+    g.addEventListener('dblclick',e=>{ const n=by[g.dataset.id]; if(n.soort==='systeem'&&n.gebouwd) laad(n.module); });
+  });
+}
+function toon(n){
+  if(n.soort==='systeem'||n.soort==='bron'||n.soort==='uitvoer'){
+    paneel.innerHTML=`<h3>${esc(n.naam)}</h3><div class="meta">${esc(n.soort)}</div><dl>
+      ${n.doc!==undefined?`<dt>${n.soort==='systeem'?'permissie':'toelichting'}</dt><dd>${esc(n.doc)||'—'}</dd>`:''}
+      ${n.residentie?`<dt>data staat</dt><dd>${esc(n.residentie)}</dd>`:''}
+      ${n.verlaat_tenant?`<dt>verlaat tenant</dt><dd>${esc(n.verlaat_tenant)}</dd>`:''}
+      ${n.module?`<dt>module</dt><dd><code>${esc(n.module)}.py</code> ${n.gebouwd?'— dubbelklik om naar binnen te gaan':'— nog niet gebouwd'}</dd>`:''}</dl>`;
+    return; }
+  paneel.innerHTML=`<h3>${esc(n.naam)}</h3><div class="meta">${esc(n.soort)} · regel ${n.regels[0]}–${n.regels[1]}</div><pre>${esc(n.code)}</pre>`;
+}
+async function laad(module){
+  const r=await fetch('/flow.json'+(module?'?module='+encodeURIComponent(module):''));
+  data=await r.json(); gekozen=null; view={x:0,y:0,k:1};
+  titel.textContent=data.titel+(data.fout?' — '+data.fout:''); terug.hidden=!module;
+  paneel.innerHTML='<p class="leeg">Klik op een blok.</p>'; teken();
+}
+terug.onclick=()=>laad(null);
+let sleep=null;
+svg.addEventListener('mousedown',e=>{ sleep={x:e.clientX-view.x,y:e.clientY-view.y}; });
+window.addEventListener('mousemove',e=>{ if(!sleep) return; view.x=e.clientX-sleep.x; view.y=e.clientY-sleep.y;
+  wereld.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); });
+window.addEventListener('mouseup',()=>sleep=null);
+svg.addEventListener('wheel',e=>{ e.preventDefault(); const k=Math.min(2.5,Math.max(.3,view.k*(e.deltaY<0?1.1:.9)));
+  view.x=e.offsetX-(e.offsetX-view.x)*k/view.k; view.y=e.offsetY-(e.offsetY-view.y)*k/view.k; view.k=k;
+  wereld.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); },{passive:false});
+laad(null);
+</script></body></html>"""
+
+
 # ── server ────────────────────────────────────────────────────────────────────
 
 def serve(manifest_pad, port=PORT):
@@ -259,15 +377,23 @@ def serve(manifest_pad, port=PORT):
         def do_GET(self):
             u = urlparse(self.path)
             run = parse_qs(u.query).get("run", ["0"])[0] == "1"
-            if u.path not in ("/", "/meet.json"):
+            if u.path == "/flow":
+                body, ctype = FLOW_PAGE.encode(), "text/html; charset=utf-8"
+            elif u.path == "/flow.json":
+                module = parse_qs(u.query).get("module", [None])[0]
+                body = json.dumps(flow.stroom(meet.laad(manifest_pad), module),
+                                  ensure_ascii=False).encode()
+                ctype = "application/json"
+            elif u.path in ("/", "/meet.json"):
+                m = meet.meet(meet.laad(manifest_pad), run_tests=run)
+                body = (json.dumps(m, ensure_ascii=False, indent=2) if u.path == "/meet.json"
+                        else html(m)).encode()
+                ctype = "application/json" if u.path == "/meet.json" else "text/html; charset=utf-8"
+            else:
                 self.send_error(404)
                 return
-            m = meet.meet(meet.laad(manifest_pad), run_tests=run)
-            body = (json.dumps(m, ensure_ascii=False, indent=2) if u.path == "/meet.json"
-                    else html(m)).encode()
             self.send_response(200)
-            self.send_header("Content-Type",
-                             "application/json" if u.path == "/meet.json" else "text/html; charset=utf-8")
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
