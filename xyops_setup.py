@@ -175,6 +175,17 @@ def stroom_workflow(cfg, er_al):
         # anders zie je juist niets op de dag dat er iets mis is.
         conns.append({"id": f"cj{i}", "source": nid, "dest": "njoin", "condition": "complete"})
 
+    # De bewakingsknoop hangt naast de systemen: die meten of de code zich
+    # gedraagt, deze of de omgeving dat doet. Beide moeten groen zijn.
+    nodes.append({"id": "nbewaking", "type": "job", "x": 380, "y": 60 + len(systemen) * 88,
+                  "data": {"label": "Bewaking · loopback, funnel, sleutels, poort", "icon": "",
+                           "category": "general", "targets": ["main"], "algo": "random",
+                           "plugin": "shellplug",
+                           "params": {"script": script("--bewaking"), "annotate": False}}})
+    conns.append({"id": "ctmb", "source": "ntrigman", "dest": "nbewaking"})
+    conns.append({"id": "ctdb", "source": "ntrigdag", "dest": "nbewaking"})
+    conns.append({"id": "cjb", "source": "nbewaking", "dest": "njoin", "condition": "complete"})
+
     nodes.append({"id": "njoin", "type": "controller", "x": 780,
                   "y": midden, "data": {"controller": "join"}})
     nodes.append({"id": "nsam", "type": "job", "x": 1060, "y": midden,

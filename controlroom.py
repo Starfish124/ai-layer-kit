@@ -12,6 +12,7 @@ houdt het zo — een pagina die zelf meet, liegt op den duur.
     python3.12 controlroom.py <layers.json> --repo systemen=$PWD --run --check
     python3.12 controlroom.py <layers.json> --run --xy         # één JSON-regel voor een xyOps-job
     python3.12 controlroom.py <layers.json> --systeem post     # één systeem, één xyOps-knoop
+    python3.12 controlroom.py <layers.json> --bewaking         # loopback, funnel, sleutels, poort
     python3.12 controlroom.py <layers.json> --tally grenzen_rood   # één getal voor een xyOps-monitor
     curl -N http://127.0.0.1:7415/events                          # de live feitenstroom (SSE)
         # meet een worktree i.p.v. de hoofdrepo; exit 1 als daar iets rood is (Vibe Kanban-poort)
@@ -25,6 +26,7 @@ from html import escape as esc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+import bewaking
 import flow
 import live
 import meet
@@ -433,6 +435,28 @@ def systeem_xy(m, module):
     return uit, (1 if rood else 0)
 
 
+def bewaking_xy(m):
+    """De omgevingsgrenzen als één xyOps-knoop: loopback, funnel, sleutels, poort."""
+    b = bewaking.meet_bewaking(m)
+    rows = [[naam, {True: "groen", False: "ROOD", None: "onbekend"}[c["ok"]], c["bewijs"] or ""]
+            for naam, c in b["controles"].items()]
+    rood = [f"{naam} — {c['bewijs']}" for naam, c in b["controles"].items() if c["ok"] is False]
+    grijs = [f"{naam} — {c['bewijs']}" for naam, c in b["controles"].items() if c["ok"] is None]
+    uit = {
+        "xy": True,
+        "data": {"bewaking_ok": int(b["ok"]),
+                 "rood": len(rood), "onbekend": len(grijs)},
+        "table": {"title": "Bewaking · omgevingsgrenzen",
+                  "cols": ["controle", "uitslag", "bewijs"], "rows": rows,
+                  "caption": "gemeten op deze machine, niet beloofd"},
+        "markdown": ("### Rood\n" + "\n".join(f"- {r}" for r in rood)) if rood
+                    else "Alle grenzen staan.",
+    }
+    if grijs:
+        uit["warning"] = f"{len(grijs)} controle(s) niet uitvoerbaar"
+    return uit, (1 if rood else 0)
+
+
 def _overrides(args):
     uit = {}
     for i, a in enumerate(args):
@@ -508,6 +532,10 @@ if __name__ == "__main__":
         serve(manifest, port=port, overrides=ov)
     elif "--check" in args:
         sys.exit(check(meet.meet(meet.laad(manifest, ov), run_tests="--run" in args)))
+    elif "--bewaking" in args:
+        uit, code = bewaking_xy(meet.laad(manifest, ov))
+        print(json.dumps(uit, ensure_ascii=False))
+        sys.exit(code)
     elif "--systeem" in args:
         uit, code = systeem_xy(meet.laad(manifest, ov), args[args.index("--systeem") + 1])
         print(json.dumps(uit, ensure_ascii=False))
