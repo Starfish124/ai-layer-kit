@@ -1,0 +1,19 @@
+{
+  "project": "Voorbeeld",
+  "tenant_doel": "klant-tenant",
+  "repos": { "platform": "~/voorbeeld-platform", "systemen": "~/voorbeeld-systemen" },
+  "lagen": [
+    { "nr": 1, "naam": "Beveiligingsfundament", "repo": "platform",
+      "bewijs": ["audit_hook.py"], "tests": ["test_audit_hook.py"] }
+  ],
+  "systemen": [
+    { "nr": 1, "naam": "Voorbeeldsysteem", "repo": "systemen", "module": "voorbeeld",
+      "bronnen": ["gedeelde postbus"], "permissies": ["Mail.Read"],
+      "residentie": "klant-tenant", "verlaat_tenant": "niets",
+      "schrijft": false, "verboden_imports": ["smtplib", "imaplib"] }
+  ],
+  "audits": [
+    { "naam": "MCP-aanroepen", "repo": "platform", "cmd": ["python3.12", "audit_hook.py", "verify"] }
+  ],
+  "beslissingen": { "repo": "platform", "bestand": "ARCHITECTURE.md" }
+}
