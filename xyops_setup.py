@@ -47,23 +47,23 @@ def script(*args):
 EVENTS = [
     dict(title="Controlekamer · meet (elk kwartier)",
          params={"script": script("--run", "--xy")},
-         triggers=[{"type": "interval", "enabled": True, "start": int(time.time()), "duration": 900}],
+         triggers=[{"type": "manual", "enabled": True}, {"type": "interval", "enabled": True, "start": int(time.time()), "duration": 900}],
          limits=[{"type": "time", "enabled": True, "duration": 600}]),
     dict(title="Controlekamer · ketens verifiëren (elk uur)",
          params={"script": script("--tally", "ketens_intact") +
                  'test "$(' + " ".join([PY, "controlroom.py", str(MANIFEST), "--tally", "ketens_intact"]) + ')" = "1"\n'},
-         triggers=[{"type": "interval", "enabled": True, "start": int(time.time()), "duration": 3600}],
+         triggers=[{"type": "manual", "enabled": True}, {"type": "interval", "enabled": True, "start": int(time.time()), "duration": 3600}],
          limits=[{"type": "time", "enabled": True, "duration": 120}]),
     dict(title="Controlekamer · RBAC-sonde (dagelijks 07:00)",
          params={"script": "#!/bin/sh\ncd " + str(Path.home() / "durabo-platform") +
                  "\npwsh -NoProfile -File entra/verify-mailbox-rbac.ps1; rc=$?\n"
                  "# exit 2 = kon niet meten: geen fout, wel zichtbaar\n"
                  "[ $rc -eq 2 ] && { echo '{\"xy\":true,\"warning\":\"sonde niet uitvoerbaar\"}'; exit 0; }\nexit $rc\n"},
-         triggers=[{"type": "schedule", "enabled": True, "hours": [7], "minutes": [0], "timezone": "Europe/Amsterdam"}],
+         triggers=[{"type": "manual", "enabled": True}, {"type": "schedule", "enabled": True, "hours": [7], "minutes": [0], "timezone": "Europe/Amsterdam"}],
          limits=[{"type": "time", "enabled": True, "duration": 300}]),
     dict(title="Controlekamer · export naar Downloads (dagelijks 18:00)",
          params={"script": script("--run", "--export", str(Path.home() / "Downloads"))},
-         triggers=[{"type": "schedule", "enabled": True, "hours": [18], "minutes": [0], "timezone": "Europe/Amsterdam"}],
+         triggers=[{"type": "manual", "enabled": True}, {"type": "schedule", "enabled": True, "hours": [18], "minutes": [0], "timezone": "Europe/Amsterdam"}],
          limits=[{"type": "time", "enabled": True, "duration": 600}]),
 ]
 
