@@ -181,6 +181,21 @@ def test_absoluut_bewijspad_wordt_geweigerd():
         raise AssertionError("absoluut pad geaccepteerd")
 
 
+def test_repo_override_meet_een_ander_pad_en_zegt_dat():
+    """Een worktree meten zonder de manifest aan te raken; onbekende naam = fout."""
+    ander = TMP / "worktree"
+    ander.mkdir(exist_ok=True)
+    (ander / "ok.py").write_text("import json\n")
+    m = meet.laad(PAD, {"r": str(ander)})
+    assert m["repos"]["r"] == ander and m["overrides"] == ["r"]
+    try:
+        meet.laad(PAD, {"bestaatniet": str(ander)})
+    except AssertionError as e:
+        assert "geen repo met die naam" in str(e)
+    else:
+        raise AssertionError("onbekende override geaccepteerd")
+
+
 def test_samenvatting_telt_wat_de_pagina_toont():
     s = M["samenvatting"]
     assert s["lagen_gebouwd"] == 3 and s["lagen_totaal"] == 4

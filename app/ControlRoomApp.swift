@@ -20,6 +20,7 @@ final class Model: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var projecten: [String] = []
     @Published var gekozen: String? = nil
     @Published var pagina = "/"          // "/" = controlekamer, "/flow" = stroom
+    @Published var metTests = false      // ?run=1: draait elke test, traag maar echt
     @Published var status = "geen project"
     var paden: [String: String] = [:]
     var kit = ""
@@ -85,7 +86,8 @@ final class Model: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     func laad() {
-        web.load(URLRequest(url: URL(string: "http://127.0.0.1:\(PORT)\(pagina)")!))
+        let q = metTests ? "?run=1" : ""
+        web.load(URLRequest(url: URL(string: "http://127.0.0.1:\(PORT)\(pagina)\(q)")!))
     }
 
     func stop() {
@@ -117,13 +119,20 @@ struct Venster: View {
             .navigationSplitViewColumnWidth(min: 160, ideal: 200)
         } detail: {
             VStack(spacing: 0) {
-                Picker("", selection: $model.pagina) {
-                    Text("Controlekamer").tag("/")
-                    Text("Stroom").tag("/flow")
+                HStack {
+                    Picker("", selection: $model.pagina) {
+                        Text("Controlekamer").tag("/")
+                        Text("Stroom").tag("/flow")
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: model.pagina) { _, _ in if model.gekozen != nil { model.laad() } }
+                    Toggle("tests draaien", isOn: $model.metTests)
+                        .toggleStyle(.switch).controlSize(.small)
+                        .onChange(of: model.metTests) { _, _ in if model.gekozen != nil { model.laad() } }
+                    Button("Ververs") { if model.gekozen != nil { model.laad() } }
+                        .controlSize(.small)
                 }
-                .pickerStyle(.segmented)
                 .padding(8)
-                .onChange(of: model.pagina) { _, _ in if model.gekozen != nil { model.laad() } }
                 Divider()
                 if model.gekozen == nil {
                     Spacer()

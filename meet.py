@@ -46,12 +46,20 @@ ADR_KOP = re.compile(r"^##\s+(ADR-\d+)\s*[—:-]?\s*(.*)$")
 
 # ── manifest ──────────────────────────────────────────────────────────────────
 
-def laad(pad):
-    """Leest layers.json en weigert wat naar klantdata zou kunnen wijzen."""
+def laad(pad, overrides=None):
+    """Leest layers.json en weigert wat naar klantdata zou kunnen wijzen.
+
+    `overrides` = {reponaam: pad} — zo meet je een git-worktree (Vibe Kanban) in
+    plaats van de hoofdrepo, zonder de manifest aan te raken. Onbekende namen
+    zijn een fout, geen stille toevoeging.
+    """
     pad = Path(pad).expanduser()
     m = json.loads(pad.read_text(encoding="utf-8"))
+    for naam in (overrides or {}):
+        assert naam in m["repos"], f"--repo {naam}: geen repo met die naam in {pad.name}"
+    m["overrides"] = sorted(overrides or {})
     repos = {}
-    for naam, p in m["repos"].items():
+    for naam, p in {**m["repos"], **(overrides or {})}.items():
         p = Path(p).expanduser()
         assert p.is_dir(), f"repo '{naam}' bestaat niet: {p}"
         repos[naam] = p
@@ -284,6 +292,7 @@ def meet(m, run_tests=False):
         "permissies_geclaimd": sorted(toegestaan), "tests": tests,
         "audits": audits, "beslissingen": adrs,
         "gemeten_op": time.strftime("%Y-%m-%d %H:%M"),
+        "overrides": m.get("overrides", []),
         "samenvatting": {
             "lagen_gebouwd": sum(1 for l in lagen if l["gebouwd"]),
             "lagen_totaal": len(lagen),

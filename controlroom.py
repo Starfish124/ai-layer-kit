@@ -8,6 +8,9 @@ houdt het zo — een pagina die zelf meet, liegt op den duur.
     python3.12 controlroom.py <layers.json> --run --html    # mét tests
     python3.12 controlroom.py <layers.json> --serve         # http://127.0.0.1:7415
     python3.12 controlroom.py <layers.json> --run --export ~/Downloads   # twee losse HTML's
+    python3.12 controlroom.py <layers.json> --repo systemen=$PWD --serve --port 7416
+    python3.12 controlroom.py <layers.json> --repo systemen=$PWD --run --check
+        # meet een worktree i.p.v. de hoofdrepo; exit 1 als daar iets rood is (Vibe Kanban-poort)
 """
 
 import json
@@ -209,7 +212,7 @@ PAGE = """<!doctype html>
   {adrs}
 
   <p class="note">Gemeten op <b>{gemeten_op}</b> — niet opgeschreven, behalve de beslissingen.
-  Repo's: {repos}.</p>
+  Repo's: {repos}.{worktree}</p>
 </div>
 </body>
 </html>"""
@@ -254,6 +257,8 @@ def html(m):
         audits="".join(_audit(a) for a in m["audits"]) or "<tr><td>geen ketens benoemd</td></tr>",
         adr_uitleg=adr_uitleg, adrs=adr_html, ketens=ketens,
         tests_tally=tests_tally, tests_label=tests_label, gemeten_op=esc(m["gemeten_op"]),
+        worktree=(" <b>Let op:</b> " + esc(", ".join(m["overrides"])) +
+                  " is een overschreven pad (worktree), niet de hoofdrepo.") if m["overrides"] else "",
         repos=esc(", ".join(f"{k} → {v}" for k, v in m["repos"].items())),
         **{k: sam[k] for k in ("lagen_gebouwd", "lagen_totaal", "systemen_gebouwd",
                                 "systemen_totaal", "grenzen_rood", "beslissingen")})
@@ -418,7 +423,44 @@ def export(manifest_pad, map_, run_tests=False):
 
 # ── server ────────────────────────────────────────────────────────────────────
 
-def serve(manifest_pad, port=PORT):
+def check(m):
+    """De poort voor een werkbank: alleen de overschreven repo's tellen, exit 1 bij rood.
+
+    Zonder --repo telt alles — maar dan blokkeert test_entra (heeft az nodig) elke
+    merge, en dat is niet wat een werkbank-poort moet doen. De poort gaat over het
+    werk in die worktree, niet over de hele wereld.
+    """
+    scope = set(m["overrides"]) or set(m["repos"])
+    rood = []
+    for s_ in m["systemen"]:
+        if s_["repo"] in scope and not s_["ok"]:
+            rood.append(f"grens rood: {s_['naam']} — " + "; ".join(
+                f"{k}: {c['bewijs']}" for k, c in s_["controles"].items() if c["ok"] is False))
+    for v in m["vreemde_permissies"]:
+        if v["repo"] in scope:
+            rood.append(f"permissie die niemand claimt: {v['permissie']} in {v['bestand']}")
+    for t in m["tests"]:
+        if t["repo"] in scope and t["groen"] is False:
+            rood.append(f"test rood: {t['bestand']} — {t['laatste_regel']}")
+    groen = sum(1 for t in m["tests"] if t["repo"] in scope and t["groen"])
+    print(f"gemeten {m['gemeten_op']} · repo's {', '.join(sorted(scope))} · {groen} tests groen")
+    for r in rood:
+        print("✗", r)
+    if not rood:
+        print("✓ niets rood in", ", ".join(sorted(scope)))
+    return 0 if not rood else 1
+
+
+def _overrides(args):
+    uit = {}
+    for i, a in enumerate(args):
+        if a == "--repo":
+            naam, _, pad = args[i + 1].partition("=")
+            uit[naam] = pad
+    return uit
+
+
+def serve(manifest_pad, port=PORT, overrides=None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             u = urlparse(self.path)
@@ -427,11 +469,11 @@ def serve(manifest_pad, port=PORT):
                 body, ctype = FLOW_PAGE.encode(), "text/html; charset=utf-8"
             elif u.path == "/flow.json":
                 module = parse_qs(u.query).get("module", [None])[0]
-                body = json.dumps(flow.stroom(meet.laad(manifest_pad), module, run),
+                body = json.dumps(flow.stroom(meet.laad(manifest_pad, overrides), module, run),
                                   ensure_ascii=False).encode()
                 ctype = "application/json"
             elif u.path in ("/", "/meet.json"):
-                m = meet.meet(meet.laad(manifest_pad), run_tests=run)
+                m = meet.meet(meet.laad(manifest_pad, overrides), run_tests=run)
                 body = (json.dumps(m, ensure_ascii=False, indent=2) if u.path == "/meet.json"
                         else html(m)).encode()
                 ctype = "application/json" if u.path == "/meet.json" else "text/html; charset=utf-8"
@@ -456,11 +498,14 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     if not args:
         sys.exit(__doc__)
-    manifest = args[0]
+    manifest, ov = args[0], _overrides(args)
     if "--export" in args:
         for pad in export(manifest, args[args.index("--export") + 1], "--run" in args):
             print(pad)
     elif "--serve" in args:
-        serve(manifest)
+        port = int(args[args.index("--port") + 1]) if "--port" in args else PORT
+        serve(manifest, port=port, overrides=ov)
+    elif "--check" in args:
+        sys.exit(check(meet.meet(meet.laad(manifest, ov), run_tests="--run" in args)))
     else:
-        print(html(meet.meet(meet.laad(manifest), run_tests="--run" in args)))
+        print(html(meet.meet(meet.laad(manifest, ov), run_tests="--run" in args)))

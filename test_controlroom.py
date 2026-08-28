@@ -33,6 +33,17 @@ def test_sonde_is_grijs_en_tijdstip_staat_erop():
     assert "niet uitvoerbaar" in H and "Gemeten op <b>" in H
 
 
+def test_check_is_een_poort_over_de_overschreven_repo():
+    """Rood in scope → exit 1 met het bewijs; scope leeg → alles telt."""
+    import io, contextlib
+    m = dict(M); m["overrides"] = ["r"]
+    uit = io.StringIO()
+    with contextlib.redirect_stdout(uit):
+        code = controlroom.check(m)
+    assert code == 1 and "smtplib" in uit.getvalue() and "test rood: test_bad.py" in uit.getvalue()
+    assert "Let op" in controlroom.html(m) and "worktree" in controlroom.html(m)
+
+
 def test_beslissingen_op_de_pagina():
     assert "ADR-001" in H and "Eerste" in H and "Waarom de tweede." in H
 
