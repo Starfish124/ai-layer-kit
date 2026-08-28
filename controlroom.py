@@ -442,7 +442,10 @@ def serve(manifest_pad, port=PORT, overrides=None):
 
     print(f"controlekamer · {manifest_pad} · http://127.0.0.1:{port}  (?run=1 draait de tests)",
           file=sys.stderr)
-    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    # Loopback, altijd. `?run=1` draait testbestanden en /events leest een
+    # klant-repo: dat hoort niet op elk wifi-netwerk waar deze Mac op zit.
+    # Van buiten = tailnet, via `tailscale serve` (nooit funnel).
+    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

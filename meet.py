@@ -146,23 +146,29 @@ def aanroepen(boom):
             arg = k.args[1] if len(k.args) > 1 else next(
                 (kw.value for kw in k.keywords if kw.arg == "mode"), None)
             modus = arg.value if isinstance(arg, ast.Constant) else ("?" if arg else "r")
-        uit.append((naam, k.lineno, modus))
+        uit.append((naam, k.lineno, modus, len(k.args)))
     return uit
 
 
 def schrijvers(boom):
     """Aanroepen die een bestand schrijven, een proces starten of mail versturen."""
     fout = []
-    for naam, regel, modus in aanroepen(boom):
+    for naam, regel, modus, nargs in aanroepen(boom):
         if naam == "open" and modus and any(c in modus for c in "wax+"):
             fout.append(f"open(…, {modus!r}) regel {regel}")
+        elif naam.split(".")[-1] == "replace":
+            # `Path(p).replace(doel)` verplaatst een bestand; `"€ 1,00".replace(",", ".")`
+            # is tekst. Het aantal argumenten scheidt die twee zonder te raden:
+            # str.replace heeft er minstens twee, Path.replace precies één.
+            if nargs == 1:
+                fout.append(f"{naam}() regel {regel}")
         elif naam.startswith(SCHRIJF_PREFIX) or naam.split(".")[-1] in SCHRIJF_METHODE:
             fout.append(f"{naam}() regel {regel}")
     return fout
 
 
 def _prefix_treffers(boom, prefixen):
-    return [f"{naam}() regel {regel}" for naam, regel, _ in aanroepen(boom)
+    return [f"{naam}() regel {regel}" for naam, regel, _, _ in aanroepen(boom)
             if naam.startswith(prefixen)]
 
 

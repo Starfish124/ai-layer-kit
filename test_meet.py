@@ -29,8 +29,9 @@ def _nepproject():
     _schrijf("repo/bad.py", "import smtplib\nimport urllib.request\nimport shutil\n"
              "from pathlib import Path\nfrom datetime import date\n"
              "def f(p):\n    open(p, 'w')\n    Path(p).write_text('x')\n    shutil.rmtree(p)\n"
-             "    urllib.request.urlopen(p)\n    return date.today()\n")
-    _schrijf("repo/lezer.py", "def f(p):\n    with open(p) as h:\n        return h.read()\n")
+             "    urllib.request.urlopen(p)\n    Path(p).replace(p)\n    return date.today()\n")
+    _schrijf("repo/lezer.py", "def f(p):\n    with open(p) as h:\n"
+             "        return h.read().replace(',', '.')\n")
     _schrijf("repo/test_ok.py", "print('ok: alles goed')\n")
     _schrijf("repo/test_bad.py", "import sys\nprint('kapot: hier gaat het mis')\nsys.exit(1)\n")
     _schrijf("repo/entra/x.ps1", "Add-Permission Mail.Read\nAdd-Permission Mail.ReadWrite\n")
@@ -99,9 +100,17 @@ def test_schrijvende_aanroepen_worden_uit_de_ast_gelezen():
     """open('w'), Path.write_text en shutil.rmtree: alle drie, met regelnummer."""
     c = SYS[2]["controles"]["schrijft_niet"]
     assert c["ok"] is False, c
-    for verwacht in ("open(…, 'w') regel 7", "write_text() regel 8", "shutil.rmtree() regel 9"):
+    for verwacht in ("open(…, 'w') regel 7", "write_text() regel 8", "shutil.rmtree() regel 9",
+                     "replace() regel 11"):
         assert verwacht in c["bewijs"], (verwacht, c["bewijs"])
     assert SYS[1]["controles"]["schrijft_niet"]["ok"] is True
+
+
+def test_tekst_replace_is_geen_bestandsverplaatsing():
+    """`"€ 1,00".replace(",", ".")` is opmaak, `Path(p).replace(doel)` verplaatst een
+    bestand. Twee argumenten tegen één — anders moet je de controle uitzetten om
+    Nederlands geld te kunnen tonen, en dat is precies hoe een grens verdwijnt."""
+    assert SYS[4]["controles"]["schrijft_niet"]["ok"] is True, SYS[4]["controles"]
 
 
 def test_lezen_is_geen_schrijven():
@@ -115,7 +124,7 @@ def test_lezen_is_geen_schrijven():
 def test_netwerk_en_klok_worden_apart_gemeld():
     c = SYS[2]["controles"]
     assert "netwerkvrij" not in c, "geen 'verlaat tenant: niets'-claim, dus geen netwerkcontrole"
-    assert c["klokvrij"]["ok"] is False and "date.today() regel 11" in c["klokvrij"]["bewijs"], c["klokvrij"]
+    assert c["klokvrij"]["ok"] is False and "date.today() regel 12" in c["klokvrij"]["bewijs"], c["klokvrij"]
 
 
 def test_vreemde_permissie_in_script_wordt_een_keer_gemeld_met_bestand():
