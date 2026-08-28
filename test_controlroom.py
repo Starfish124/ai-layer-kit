@@ -29,6 +29,10 @@ def test_rode_grens_citeert_het_bewijs():
     assert "Mail.ReadWrite in entra/x.ps1" in H
 
 
+def test_sonde_is_grijs_en_tijdstip_staat_erop():
+    assert "niet uitvoerbaar" in H and "Gemeten op <b>" in H
+
+
 def test_beslissingen_op_de_pagina():
     assert "ADR-001" in H and "Eerste" in H and "Waarom de tweede." in H
 

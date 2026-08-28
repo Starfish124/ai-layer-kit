@@ -13,6 +13,7 @@ import meet
 
 TMP = Path(tempfile.mkdtemp(prefix="ai-layer-kit-flow-"))
 MODULE = '''"""Nepsysteem."""
+UITKOMSTEN = ("bron ontbreekt", "veld ontbreekt")
 REGELS = [1, 2, 3]
 
 def _pak(x):
@@ -21,6 +22,7 @@ def _pak(x):
 
 def vul(order):
     """Vult uit de bron."""
+    order.get("klant"); order.get("artikelnummer")
     return [_pak(i) for i in order]
 
 def werk_af(orders):
@@ -34,6 +36,7 @@ def los():
 def _nep():
     (TMP / "repo").mkdir(parents=True, exist_ok=True)
     (TMP / "repo" / "nep.py").write_text(MODULE)
+    (TMP / "repo" / "test_nep.py").write_text("import nep\nnep.werk_af([{0: 1}, {1: 2}])\nprint('ok')\n")
     manifest = {"project": "Nep", "tenant_doel": "t", "repos": {"r": str(TMP / "repo")},
                 "lagen": [], "audits": [],
                 "systemen": [
@@ -64,11 +67,11 @@ def test_overzicht_deelt_bronnen_en_koppelt_ze():
 
 def test_functies_zijn_knopen_met_hun_eigen_code():
     ids = {n["id"]: n for n in F["nodes"]}
-    assert set(ids) == {"REGELS", "_pak", "vul", "werk_af", "los"}
+    assert set(ids) == {"UITKOMSTEN", "REGELS", "_pak", "vul", "werk_af", "los"}
     assert ids["REGELS"]["soort"] == "data" and ids["vul"]["soort"] == "functie"
     assert ids["vul"]["code"].startswith("def vul(order):") and "_pak(i)" in ids["vul"]["code"]
     assert ids["vul"]["doc"] == "Vult uit de bron."
-    assert ids["_pak"]["regels"] == [4, 6]
+    assert ids["_pak"]["regels"] == [5, 7]
 
 
 def test_pijlen_zijn_echte_aanroepen():
@@ -82,6 +85,25 @@ def test_lagen_lopen_van_bron_naar_uitkomst():
     laag = {n["id"]: n["laag"] for n in F["nodes"]}
     assert laag["REGELS"] == 0 and laag["_pak"] == 1 and laag["vul"] == 2 and laag["werk_af"] == 3
     assert laag["los"] == 0
+
+
+def test_velden_en_uitkomsten_zijn_gemeten_contracten():
+    ids = {n["id"]: n for n in O["nodes"]}
+    assert ids["sys:nep"]["velden"] == ["artikelnummer", "klant"], "de .get-sleutels zijn het contract"
+    assert ids["sys:later"]["velden"] == []
+    assert ids["uit:nep"]["uitkomsten"] == ["bron ontbreekt", "veld ontbreekt"]
+    assert ids["uit:nep"]["doc"] == "bron ontbreekt · veld ontbreekt"
+
+
+def test_dekking_zegt_welke_functie_de_test_raakt():
+    """test_nep roept werk_af → vul → _pak; `los` raakt niemand aan."""
+    d = flow.stroom(M, "nep", run=True)
+    assert d["dekking"] is True
+    ids = {n["id"]: n for n in d["nodes"]}
+    assert ids["werk_af"]["geraakt"] and ids["vul"]["geraakt"] and ids["_pak"]["geraakt"]
+    assert ids["los"]["geraakt"] is False
+    assert "geraakt" not in ids["REGELS"], "regeltabellen worden altijd geraakt bij import — niets te melden"
+    assert "geraakt" not in F["nodes"][0] or F["dekking"] is False, "zonder run geen dekking"
 
 
 def test_niets_is_met_de_hand_geplaatst():

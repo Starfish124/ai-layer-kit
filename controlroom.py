@@ -65,7 +65,9 @@ def _laag(l):
 # ── grenzen ───────────────────────────────────────────────────────────────────
 
 CONTROLE_NAAM = {"imports": "geen verboden import",
-                 "schrijft_niet": "schrijft nergens"}
+                 "schrijft_niet": "schrijft nergens",
+                 "netwerkvrij": "geen netwerk",
+                 "klokvrij": "geen klok, geen locale"}
 
 
 def _systeem(s):
@@ -95,9 +97,10 @@ def _test(t):
 
 
 def _audit(a):
-    lamp = "groen" if a["ok"] else "rood"
+    lamp = {True: "groen", False: "rood", None: "niet gebouwd"}[a["ok"]]
+    tekst = {True: "intact", False: "gebroken", None: "niet uitvoerbaar"}[a["ok"]]
     return (f'<tr><td class="wie">{esc(a["repo"])}</td><td>{esc(a["naam"])}</td>'
-            f'<td>{_pil("intact" if a["ok"] else "gebroken", lamp)}</td>'
+            f'<td>{_pil(tekst, lamp)}</td>'
             f'<td class="mute">{esc(a["uitvoer"])}</td></tr>')
 
 
@@ -205,7 +208,8 @@ PAGE = """<!doctype html>
   <p class="uitleg">{adr_uitleg}</p>
   {adrs}
 
-  <p class="note">Gemeten, niet opgeschreven — behalve de beslissingen. Repo's: {repos}.</p>
+  <p class="note">Gemeten op <b>{gemeten_op}</b> — niet opgeschreven, behalve de beslissingen.
+  Repo's: {repos}.</p>
 </div>
 </body>
 </html>"""
@@ -249,7 +253,7 @@ def html(m):
         tests="".join(_test(t) for t in m["tests"]) or "<tr><td>geen tests gevonden</td></tr>",
         audits="".join(_audit(a) for a in m["audits"]) or "<tr><td>geen ketens benoemd</td></tr>",
         adr_uitleg=adr_uitleg, adrs=adr_html, ketens=ketens,
-        tests_tally=tests_tally, tests_label=tests_label,
+        tests_tally=tests_tally, tests_label=tests_label, gemeten_op=esc(m["gemeten_op"]),
         repos=esc(", ".join(f"{k} → {v}" for k, v in m["repos"].items())),
         **{k: sam[k] for k in ("lagen_gebouwd", "lagen_totaal", "systemen_gebouwd",
                                 "systemen_totaal", "grenzen_rood", "beslissingen")})
@@ -280,6 +284,11 @@ FLOW_PAGE = """<!doctype html>
   header b { font-size:16px; }
   header a { font:12px var(--mono); color:var(--blue); cursor:pointer; }
   header .hint { margin-left:auto; font:12px var(--mono); color:var(--mute); }
+  #zoek { font:12px var(--mono); padding:4px 10px; border:1px solid var(--line); border-radius:999px;
+          background:var(--paper); width:300px; margin-left:12px; }
+  .knoop.dim { opacity:.15; }
+  .knoop text.badge { font:600 10px var(--mono); }
+  .knoop text.badge.ja { fill:var(--good); } .knoop text.badge.nee { fill:var(--faint); }
   #canvas { overflow:hidden; cursor:grab; position:relative; }
   #canvas:active { cursor:grabbing; }
   svg { width:100%; height:100%; }
@@ -307,6 +316,7 @@ FLOW_PAGE = """<!doctype html>
 </style></head>
 <body>
 <header><span class="eyebrow">Stroom</span><b id="titel"></b><a id="terug" hidden>← overzicht</a>
+  <input id="zoek" placeholder="filter: Exact-export, Mail.Read, ontbreekt…" autocomplete="off">
   <span class="hint">klik = code · dubbelklik systeem = naar binnen · sleep = pannen · scroll = zoom</span></header>
 <div id="canvas"><svg id="svg"><defs>
   <marker id="punt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -332,31 +342,46 @@ function teken(){
     h+=`<path class="pijl" d="M${van.x} ${van.y} C${van.x+dx} ${van.y} ${naar.x-dx} ${naar.y} ${naar.x} ${naar.y}"/>`; }
   for(const n of data.nodes){ const p=pos(n);
     const kl=['knoop',n.soort, n.soort==='systeem'&&!n.gebouwd?'niet':'', n.id===gekozen?'gekozen':''].join(' ');
+    const badge = n.geraakt===true? `<text x="${W-12}" y="16" text-anchor="end" class="badge ja">✓ test</text>`
+                : n.geraakt===false? `<text x="${W-12}" y="16" text-anchor="end" class="badge nee">○ geen test</text>` : '';
     h+=`<g class="${kl}" data-id="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect width="${W}" height="${H}"/>
-      <text x="12" y="16" class="soort">${esc(n.soort)}</text>
+      <text x="12" y="16" class="soort">${esc(n.soort)}</text>${badge}
       <text x="12" y="33">${esc(knip(n.naam,30))}</text>
       <text x="12" y="48" class="doc">${esc(knip(n.doc,36))}</text></g>`; }
   wereld.innerHTML=h;
+  filter();
   wereld.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`);
   wereld.querySelectorAll('.knoop').forEach(g=>{
     g.addEventListener('click',e=>{ gekozen=g.dataset.id; toon(by[gekozen]); teken(); });
     g.addEventListener('dblclick',e=>{ const n=by[g.dataset.id]; if(n.soort==='systeem'&&n.gebouwd) laad(n.module); });
   });
 }
+function tekst(n){ return [n.naam,n.doc,n.soort,n.module,...(n.bronnen||[]),...(n.velden||[]),...(n.uitkomsten||[])].join(' ').toLowerCase(); }
+function filter(){
+  const q=document.getElementById('zoek').value.trim().toLowerCase();
+  const by={}; (data?.nodes||[]).forEach(n=>by[n.id]=n);
+  wereld.querySelectorAll('.knoop').forEach(g=>g.classList.toggle('dim', !!q && !tekst(by[g.dataset.id]).includes(q)));
+}
+document.getElementById('zoek').addEventListener('input', filter);
 function toon(n){
   if(n.soort==='systeem'||n.soort==='bron'||n.soort==='uitvoer'){
     paneel.innerHTML=`<h3>${esc(n.naam)}</h3><div class="meta">${esc(n.soort)}</div><dl>
       ${n.doc!==undefined?`<dt>${n.soort==='systeem'?'permissie':'toelichting'}</dt><dd>${esc(n.doc)||'—'}</dd>`:''}
       ${n.residentie?`<dt>data staat</dt><dd>${esc(n.residentie)}</dd>`:''}
       ${n.verlaat_tenant?`<dt>verlaat tenant</dt><dd>${esc(n.verlaat_tenant)}</dd>`:''}
+      ${n.bronnen?.length?`<dt>leest</dt><dd>${esc(n.bronnen.join(', '))}</dd>`:''}
+      ${n.velden?.length?`<dt>velden (gemeten)</dt><dd>${n.velden.map(v=>`<code>${esc(v)}</code>`).join(' ')}</dd>`:''}
+      ${n.uitkomsten?.length?`<dt>meldt</dt><dd>${n.uitkomsten.map(v=>`<code>${esc(v)}</code>`).join(' ')}</dd>`:''}
       ${n.module?`<dt>module</dt><dd><code>${esc(n.module)}.py</code> ${n.gebouwd?'— dubbelklik om naar binnen te gaan':'— nog niet gebouwd'}</dd>`:''}</dl>`;
     return; }
-  paneel.innerHTML=`<h3>${esc(n.naam)}</h3><div class="meta">${esc(n.soort)} · regel ${n.regels[0]}–${n.regels[1]}</div><pre>${esc(n.code)}</pre>`;
+  const dek = n.geraakt===true?' · door de test geraakt': n.geraakt===false?' · door geen test geraakt':'';
+  paneel.innerHTML=`<h3>${esc(n.naam)}</h3><div class="meta">${esc(n.soort)} · regel ${n.regels[0]}–${n.regels[1]}${dek}</div><pre>${esc(n.code)}</pre>`;
 }
 const INLINE = window.STROOM || null;   // gezet door --export; anders live van de server
 async function laad(module){
   if(INLINE){ data=INLINE[module||'']; }
-  else { const r=await fetch('/flow.json'+(module?'?module='+encodeURIComponent(module):'')); data=await r.json(); }
+  else { const run=new URLSearchParams(location.search).get('run')==='1';
+    const r=await fetch('/flow.json?'+(module?'module='+encodeURIComponent(module)+'&':'')+(run?'run=1':'')); data=await r.json(); }
   gekozen=null; view={x:0,y:0,k:1};
   titel.textContent=data.titel+(data.fout?' — '+data.fout:''); terug.hidden=!module;
   paneel.innerHTML='<p class="leeg">Klik op een blok.</p>'; teken();
@@ -402,7 +427,7 @@ def serve(manifest_pad, port=PORT):
                 body, ctype = FLOW_PAGE.encode(), "text/html; charset=utf-8"
             elif u.path == "/flow.json":
                 module = parse_qs(u.query).get("module", [None])[0]
-                body = json.dumps(flow.stroom(meet.laad(manifest_pad), module),
+                body = json.dumps(flow.stroom(meet.laad(manifest_pad), module, run),
                                   ensure_ascii=False).encode()
                 ctype = "application/json"
             elif u.path in ("/", "/meet.json"):

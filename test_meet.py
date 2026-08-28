@@ -26,7 +26,11 @@ def _schrijf(rel, tekst):
 
 def _nepproject():
     _schrijf("repo/ok.py", "import json\n")
-    _schrijf("repo/bad.py", "import smtplib\nimport urllib.request\nx = \"POST\"\n")
+    _schrijf("repo/bad.py", "import smtplib\nimport urllib.request\nimport shutil\n"
+             "from pathlib import Path\nfrom datetime import date\n"
+             "def f(p):\n    open(p, 'w')\n    Path(p).write_text('x')\n    shutil.rmtree(p)\n"
+             "    urllib.request.urlopen(p)\n    return date.today()\n")
+    _schrijf("repo/lezer.py", "def f(p):\n    with open(p) as h:\n        return h.read()\n")
     _schrijf("repo/test_ok.py", "print('ok: alles goed')\n")
     _schrijf("repo/test_bad.py", "import sys\nprint('kapot: hier gaat het mis')\nsys.exit(1)\n")
     _schrijf("repo/entra/x.ps1", "Add-Permission Mail.Read\nAdd-Permission Mail.ReadWrite\n")
@@ -48,10 +52,14 @@ def _nepproject():
              "schrijft": False, "verboden_imports": ["smtplib"]},
             {"nr": 3, "naam": "Toekomst", "repo": "r", "module": "nog_niet", "permissies": [],
              "schrijft": False, "verboden_imports": ["smtplib"]},
+            {"nr": 4, "naam": "Lezer", "repo": "r", "module": "lezer", "permissies": [],
+             "schrijft": False, "verlaat_tenant": "niets", "verboden_imports": []},
         ],
         "audits": [
             {"naam": "heel", "repo": "r", "cmd": ["python3.12", "-c", "print('intact')"]},
             {"naam": "kapot", "repo": "r", "cmd": ["python3.12", "-c", "import sys; print('breuk op 3'); sys.exit(1)"]},
+            {"naam": "sonde", "repo": "r", "cmd": ["python3.12", "-c", "import sys; print('geen tenant'); sys.exit(2)"]},
+            {"naam": "weg", "repo": "r", "cmd": ["/bestaat/niet"]},
         ],
         "beslissingen": {"repo": "r", "bestand": "ARCHITECTURE.md"},
     }
@@ -87,10 +95,27 @@ def test_verboden_import_wordt_gevonden_en_geciteerd():
     assert SYS[2]["ok"] is False and SYS[1]["ok"] is True
 
 
-def test_schrijfwerkwoord_naast_netwerk_import_is_rood():
+def test_schrijvende_aanroepen_worden_uit_de_ast_gelezen():
+    """open('w'), Path.write_text en shutil.rmtree: alle drie, met regelnummer."""
     c = SYS[2]["controles"]["schrijft_niet"]
-    assert c["ok"] is False and '"POST"' in c["bewijs"], c
+    assert c["ok"] is False, c
+    for verwacht in ("open(…, 'w') regel 7", "write_text() regel 8", "shutil.rmtree() regel 9"):
+        assert verwacht in c["bewijs"], (verwacht, c["bewijs"])
     assert SYS[1]["controles"]["schrijft_niet"]["ok"] is True
+
+
+def test_lezen_is_geen_schrijven():
+    """open(p) zonder modus is lezen; een lezer mag niet rood worden."""
+    s = SYS[4]
+    assert s["controles"]["schrijft_niet"]["ok"] is True, s["controles"]
+    assert s["controles"]["netwerkvrij"]["ok"] is True
+    assert s["controles"]["klokvrij"]["ok"] is True and s["ok"] is True
+
+
+def test_netwerk_en_klok_worden_apart_gemeld():
+    c = SYS[2]["controles"]
+    assert "netwerkvrij" not in c, "geen 'verlaat tenant: niets'-claim, dus geen netwerkcontrole"
+    assert c["klokvrij"]["ok"] is False and "date.today() regel 11" in c["klokvrij"]["bewijs"], c["klokvrij"]
 
 
 def test_vreemde_permissie_in_script_wordt_een_keer_gemeld_met_bestand():
@@ -122,6 +147,15 @@ def test_kapotte_keten_is_gebroken_en_niet_afwezig():
     assert M["samenvatting"]["ketens_intact"] is False
 
 
+def test_een_sonde_die_niet_kan_meten_is_grijs_niet_rood():
+    """Exit 2 en 'programma bestaat niet' zijn 'niet uitvoerbaar' — een derde toestand."""
+    per = {a["naam"]: a for a in M["audits"]}
+    assert per["sonde"]["ok"] is None and per["sonde"]["uitvoer"] == "geen tenant"
+    assert per["weg"]["ok"] is None and "niet uitvoerbaar" in per["weg"]["uitvoer"]
+    assert M["samenvatting"]["sondes_niet_uitvoerbaar"] == 2
+    assert "gemeten_op" in M and len(M["gemeten_op"]) == 16
+
+
 def test_beslissingen_worden_gelezen_in_beide_kopvormen():
     lijst = M["beslissingen"]["lijst"]
     assert [a["nr"] for a in lijst] == ["ADR-001", "ADR-002"]
@@ -150,7 +184,7 @@ def test_absoluut_bewijspad_wordt_geweigerd():
 def test_samenvatting_telt_wat_de_pagina_toont():
     s = M["samenvatting"]
     assert s["lagen_gebouwd"] == 3 and s["lagen_totaal"] == 4
-    assert s["systemen_gebouwd"] == 2 and s["systemen_totaal"] == 3
+    assert s["systemen_gebouwd"] == 3 and s["systemen_totaal"] == 4
     assert s["grenzen_rood"] == 2   # Stout (import) + één vreemde permissie in de repo
     assert s["tests_groen"] == 1 and s["tests_rood"] == 1 and s["tests_totaal"] == 2
     assert s["beslissingen"] == 2

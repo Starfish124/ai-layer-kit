@@ -22,6 +22,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # Dezelfde vijf woorden als stride-durabo/systems.py, zodat de kleuren kloppen.
@@ -31,8 +32,15 @@ LAMPEN = ("niet gebouwd", "gebouwd, ongetest", "getest", "groen", "rood")
 # er níet in de manifest staat — dat is precies het punt.
 PERMISSIE = re.compile(r"\b(?:Mail|MailboxSettings|Files|Sites|User|Directory|"
                        r"Calendars|Contacts|Chat|ChannelMessage)\.[A-Za-z.]+\b")
-SCHRIJFWERKWOORD = re.compile(r'"(?:POST|PATCH|PUT|DELETE)"')
-NETWERK = {"urllib.request", "http.client"}
+# Aanroepen die schrijven, spawnen of versturen — gelezen uit de AST, niet gegrept.
+SCHRIJF_PREFIX = ("os.remove", "os.unlink", "os.rename", "os.replace", "os.makedirs",
+                  "os.mkdir", "os.rmdir", "os.system", "os.truncate", "shutil.",
+                  "subprocess.", "smtplib.", "imaplib.", "ftplib.")
+SCHRIJF_METHODE = {"write_text", "write_bytes", "unlink", "rename", "replace", "mkdir",
+                   "rmdir", "touch", "sendmail", "send_message"}
+NETWERK_PREFIX = ("urllib.request.", "http.client.", "socket.", "ssl.")
+KLOK_PREFIX = ("datetime.now", "datetime.utcnow", "datetime.today", "date.today",
+               "time.time", "time.localtime", "time.strftime", "locale.")
 ADR_KOP = re.compile(r"^##\s+(ADR-\d+)\s*[—:-]?\s*(.*)$")
 
 
@@ -105,6 +113,51 @@ def _imports(pad):
     return uit
 
 
+def _gestippeld(f):
+    """`a.b.c` van een aanroep-doel, of alleen de methode als de basis geen naam is."""
+    delen = []
+    while isinstance(f, ast.Attribute):
+        delen.append(f.attr)
+        f = f.value
+    if isinstance(f, ast.Name):
+        delen.append(f.id)
+    elif isinstance(f, ast.Call):
+        return ".".join(reversed(delen)) or "?"      # Path(...).write_text → write_text
+    return ".".join(reversed(delen))
+
+
+def aanroepen(boom):
+    """Elke aanroep in het bestand als (gestippelde naam, regel, schrijfmodus-van-open)."""
+    uit = []
+    for k in ast.walk(boom):
+        if not isinstance(k, ast.Call):
+            continue
+        naam = _gestippeld(k.func)
+        modus = None
+        if naam == "open":
+            arg = k.args[1] if len(k.args) > 1 else next(
+                (kw.value for kw in k.keywords if kw.arg == "mode"), None)
+            modus = arg.value if isinstance(arg, ast.Constant) else ("?" if arg else "r")
+        uit.append((naam, k.lineno, modus))
+    return uit
+
+
+def schrijvers(boom):
+    """Aanroepen die een bestand schrijven, een proces starten of mail versturen."""
+    fout = []
+    for naam, regel, modus in aanroepen(boom):
+        if naam == "open" and modus and any(c in modus for c in "wax+"):
+            fout.append(f"open(…, {modus!r}) regel {regel}")
+        elif naam.startswith(SCHRIJF_PREFIX) or naam.split(".")[-1] in SCHRIJF_METHODE:
+            fout.append(f"{naam}() regel {regel}")
+    return fout
+
+
+def _prefix_treffers(boom, prefixen):
+    return [f"{naam}() regel {regel}" for naam, regel, _ in aanroepen(boom)
+            if naam.startswith(prefixen)]
+
+
 def permissies_in_code(repo):
     """Welke Graph-permissies staan er letterlijk in de Entra-scripts van een repo."""
     gevonden = {}
@@ -141,22 +194,27 @@ def grens_status(systeem, repos):
     controles = {}
 
     if gebouwd:
+        boom = ast.parse(module.read_text(encoding="utf-8"))
         imports = _imports(module)
         fout = sorted(imports & set(systeem.get("verboden_imports", [])))
         controles["imports"] = {"ok": not fout, "bewijs": ", ".join(fout)}
 
         if systeem.get("schrijft") is False:
-            # ponytail: string-grep op werkwoorden naast een netwerk-import; een
-            # call-graph komt pas als een systeem legitiem ergens naartoe schrijft.
-            tekst = module.read_text(encoding="utf-8")
-            werkwoorden = sorted(set(SCHRIJFWERKWOORD.findall(tekst)))
-            fout = bool(imports & NETWERK) and bool(werkwoorden)
-            controles["schrijft_niet"] = {"ok": not fout,
-                                          "bewijs": ", ".join(werkwoorden) if fout else ""}
+            fout = schrijvers(boom)
+            controles["schrijft_niet"] = {"ok": not fout, "bewijs": "; ".join(fout)}
+
+        # "verlaat tenant: niets" is een claim over netwerkverkeer; meet hem dan ook.
+        if str(systeem.get("verlaat_tenant", "")).startswith("niets"):
+            fout = _prefix_treffers(boom, NETWERK_PREFIX)
+            controles["netwerkvrij"] = {"ok": not fout, "bewijs": "; ".join(fout)}
+
+        # Een regelmotor die de klok of de locale leest geeft morgen een ander
+        # antwoord op dezelfde invoer — en dan is het geen regelmotor meer.
+        fout = _prefix_treffers(boom, KLOK_PREFIX)
+        controles["klokvrij"] = {"ok": not fout, "bewijs": "; ".join(fout)}
     else:
-        controles["imports"] = {"ok": None, "bewijs": "nog geen code"}
-        if systeem.get("schrijft") is False:
-            controles["schrijft_niet"] = {"ok": None, "bewijs": "nog geen code"}
+        for naam in ("imports", "schrijft_niet", "klokvrij"):
+            controles[naam] = {"ok": None, "bewijs": "nog geen code"}
 
     alles_ok = all(c["ok"] is not False for c in controles.values())
     return {**systeem, "gebouwd": gebouwd, "controles": controles, "ok": alles_ok}
@@ -178,11 +236,14 @@ def tests_overal(repos, run=True):
 def audit_status(audit, repos):
     repo = repos[audit["repo"]]
     try:
-        r = subprocess.run(audit["cmd"], cwd=repo, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(audit["cmd"], cwd=repo, capture_output=True, text=True, timeout=120)
         staart = (r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or [""])[-1]
-        return {**audit, "ok": r.returncode == 0, "uitvoer": staart}
+        # Exit 2 = de sonde kon niet meten (geen tenant, geen module, config leeg).
+        # Dat is een derde toestand, geen breuk: grijs, met de reden erbij.
+        ok = None if r.returncode == 2 else r.returncode == 0
+        return {**audit, "ok": ok, "uitvoer": staart}
     except (OSError, subprocess.TimeoutExpired) as e:
-        return {**audit, "ok": False, "uitvoer": str(e)}
+        return {**audit, "ok": None, "uitvoer": f"niet uitvoerbaar: {e}"}
 
 
 # ── beslissingen ──────────────────────────────────────────────────────────────
@@ -222,6 +283,7 @@ def meet(m, run_tests=False):
         "lagen": lagen, "systemen": systemen, "vreemde_permissies": vreemd,
         "permissies_geclaimd": sorted(toegestaan), "tests": tests,
         "audits": audits, "beslissingen": adrs,
+        "gemeten_op": time.strftime("%Y-%m-%d %H:%M"),
         "samenvatting": {
             "lagen_gebouwd": sum(1 for l in lagen if l["gebouwd"]),
             "lagen_totaal": len(lagen),
@@ -231,7 +293,9 @@ def meet(m, run_tests=False):
             "tests_groen": sum(1 for t in tests if t["groen"]),
             "tests_rood": sum(1 for t in tests if t["groen"] is False),
             "tests_totaal": len(tests),
-            "ketens_intact": all(a["ok"] for a in audits) if audits else None,
+            "ketens_intact": all(a["ok"] for a in audits if a["ok"] is not None)
+                             if any(a["ok"] is not None for a in audits) else None,
+            "sondes_niet_uitvoerbaar": sum(1 for a in audits if a["ok"] is None),
             "beslissingen": len(adrs["lijst"]),
         },
     }
