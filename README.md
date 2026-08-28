@@ -32,3 +32,15 @@ absolute paden, houdt geen klantdata vast en tekent niets met de hand.
 - Geen dashboards over Azure-telemetrie: die meten Azure-gehoste dingen, en dit draait lokaal.
 - Geen diagrammen uit de losse pols: `/graph` in het project tekent de modulekaart uit `ast`.
 - Geen model: de pagina rekent niets, `test_controlroom` bewaakt dat.
+
+## Op deze Mac (launchd)
+
+- `com.stride.controlekamer` — de controlekamer op 127.0.0.1:7415, altijd aan; tailnet-only op
+  `https://mac-mini.tailc91701.ts.net:8445` (nooit Funnel: `?run=1` draait tests). De app is
+  alleen nog een venster op deze server.
+- `com.stride.vibekanban` — Vibe Kanban 0.1.44 op 127.0.0.1:3789, **de binary rechtstreeks**
+  (`~/.vibe-kanban/bin/v0.1.44-…`), dus gepind en zonder npx; tailnet-only op :8444.
+  Repo Durabo: dev-server = controlekamer over de worktree (:7416), cleanup = `--check`.
+
+Logs: `~/Library/Logs/controlekamer.log`, `~/Library/Logs/vibe-kanban.log`.
+Herstart na een kit-wijziging: `launchctl kickstart -k gui/$(id -u)/com.stride.controlekamer`.
