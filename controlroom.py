@@ -10,17 +10,22 @@ houdt het zo — een pagina die zelf meet, liegt op den duur.
     python3.12 controlroom.py <layers.json> --run --export ~/Downloads   # twee losse HTML's
     python3.12 controlroom.py <layers.json> --repo systemen=$PWD --serve --port 7416
     python3.12 controlroom.py <layers.json> --repo systemen=$PWD --run --check
+    python3.12 controlroom.py <layers.json> --run --xy         # één JSON-regel voor een xyOps-job
+    python3.12 controlroom.py <layers.json> --tally grenzen_rood   # één getal voor een xyOps-monitor
+    curl -N http://127.0.0.1:7415/events                          # de live feitenstroom (SSE)
         # meet een worktree i.p.v. de hoofdrepo; exit 1 als daar iets rood is (Vibe Kanban-poort)
 """
 
 import json
 import pathlib
+import re
 import sys
 from html import escape as esc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import flow
+import live
 import meet
 
 PORT = 7415   # vrij van 7350/7360/7411/7455/8420/8765/8766
@@ -264,144 +269,37 @@ def html(m):
                                 "systemen_totaal", "grenzen_rood", "beslissingen")})
 
 
-# ── de stroom: het canvas ─────────────────────────────────────────────────────
-# Alle data komt uit /flow.json (flow.py). De JS hier legt alleen neer wat hij
-# krijgt: kolom = laag, rij = rij. Klik = code in het paneel; dubbelklik op een
-# systeem = naar binnen. Geen bibliotheek, geen sleepbare knopen — posities zijn
-# geen waarheid, dus ze worden ook niet bewaard.
+# ── de stroom: het canvas (React Flow, gebouwd in web/dist) ──────────────────
+# `npm run build` in web/ levert dist/; die staat in git, zodat deze server geen
+# Node nodig heeft. Alles wat het canvas toont komt uit /flow.json en /events.
 
-FLOW_PAGE = """<!doctype html>
-<html lang="nl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stroom</title>
-<style>
-  :root { --teal:#009b8f; --teal-deep:#007c72; --teal-tint:#e3f4f2; --blue:#255fa9; --blue-tint:#e9eff8;
-          --warn:#b97b17; --warn-tint:#fdf5e3; --good:#1d7d43; --paper:#f2f5f7; --card:#fff;
-          --ink:#10131a; --ink-2:#3d4453; --mute:#79808f; --faint:#a5abb8; --line:#e3e7ee;
-          --sans:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;
-          --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-  * { box-sizing: border-box; }
-  body { margin:0; height:100vh; display:grid; grid-template-rows:auto 1fr; grid-template-columns:1fr 440px;
-         background:var(--paper); color:var(--ink); font:14px/1.5 var(--sans); overflow:hidden; }
-  header { grid-column:1/3; display:flex; gap:14px; align-items:baseline; padding:10px 16px;
-           border-bottom:1px solid var(--line); background:var(--card); }
-  header .eyebrow { font:12px var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--teal-deep); }
-  header b { font-size:16px; }
-  header a { font:12px var(--mono); color:var(--blue); cursor:pointer; }
-  header .hint { margin-left:auto; font:12px var(--mono); color:var(--mute); }
-  #zoek { font:12px var(--mono); padding:4px 10px; border:1px solid var(--line); border-radius:999px;
-          background:var(--paper); width:300px; margin-left:12px; }
-  .knoop.dim { opacity:.15; }
-  .knoop text.badge { font:600 10px var(--mono); }
-  .knoop text.badge.ja { fill:var(--good); } .knoop text.badge.nee { fill:var(--faint); }
-  #canvas { overflow:hidden; cursor:grab; position:relative; }
-  #canvas:active { cursor:grabbing; }
-  svg { width:100%; height:100%; }
-  .knoop rect { fill:var(--card); stroke:var(--line); stroke-width:1; rx:10; }
-  .knoop.bron rect { stroke:var(--faint); stroke-dasharray:4 3; }
-  .knoop.systeem rect { stroke:var(--teal); stroke-width:1.5; }
-  .knoop.systeem.niet rect { stroke:var(--faint); fill:var(--paper); }
-  .knoop.uitvoer rect { stroke:var(--good); }
-  .knoop.data rect { stroke:var(--warn); fill:var(--warn-tint); }
-  .knoop.functie rect { stroke:var(--blue); }
-  .knoop.gekozen rect { stroke-width:3; }
-  .knoop text { font:600 12px var(--sans); fill:var(--ink); pointer-events:none; }
-  .knoop text.doc { font:10px var(--mono); fill:var(--mute); font-weight:400; }
-  .knoop text.soort { font:9px var(--mono); fill:var(--faint); letter-spacing:.08em; text-transform:uppercase; }
-  .pijl { fill:none; stroke:var(--faint); stroke-width:1.4; marker-end:url(#punt); }
-  aside { border-left:1px solid var(--line); background:var(--card); overflow:auto; padding:14px 16px; }
-  aside h3 { margin:0 0 2px; font:700 14px var(--mono); }
-  aside .meta { font:11px var(--mono); color:var(--mute); margin-bottom:10px; }
-  aside pre { margin:0; font:11.5px/1.5 var(--mono); white-space:pre-wrap; word-break:break-word;
-              background:var(--paper); padding:12px; border-radius:10px; }
-  aside dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; font-size:13px; }
-  aside dt { font:11px var(--mono); color:var(--mute); text-transform:uppercase; letter-spacing:.06em; }
-  aside dd { margin:0; }
-  aside .leeg { color:var(--mute); font-size:13px; }
-</style></head>
-<body>
-<header><span class="eyebrow">Stroom</span><b id="titel"></b><a id="terug" hidden>← overzicht</a>
-  <input id="zoek" placeholder="filter: Exact-export, Mail.Read, ontbreekt…" autocomplete="off">
-  <span class="hint">klik = code · dubbelklik systeem = naar binnen · sleep = pannen · scroll = zoom</span></header>
-<div id="canvas"><svg id="svg"><defs>
-  <marker id="punt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M0 0L10 5L0 10z" fill="#a5abb8"/></marker></defs><g id="wereld"></g></svg></div>
-<aside id="paneel"><p class="leeg">Klik op een blok.</p></aside>
-<script>
-const W=210, H=58, GX=90, GY=16, PAD=30;
-const svg=document.getElementById('svg'), wereld=document.getElementById('wereld');
-const paneel=document.getElementById('paneel'), titel=document.getElementById('titel'), terug=document.getElementById('terug');
-let view={x:0,y:0,k:1}, data=null, gekozen=null;
-const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function pos(n){ return {x:PAD+n.laag*(W+GX), y:PAD+n.rij*(H+GY)}; }
-function knip(s,n){ s=String(s??''); return s.length>n? s.slice(0,n-1)+'…': s; }
-function teken(){
-  const by={}; data.nodes.forEach(n=>by[n.id]=n);
-  let h='';
-  for(const [a,b] of data.edges){ const A=pos(by[a]),B=pos(by[b]); if(!by[a]||!by[b]) continue;
-    // in het overzicht stroomt data van bron (links) naar systeem; binnen een systeem
-    // roept links-hoog rechts-laag aan, dus de pijl loopt van aanroeper naar aangeroepene
-    const van=A.x<B.x? {x:A.x+W,y:A.y+H/2}:{x:A.x,y:A.y+H/2};
-    const naar=A.x<B.x? {x:B.x,y:B.y+H/2}:{x:B.x+W,y:B.y+H/2};
-    const dx=(naar.x-van.x)/2;
-    h+=`<path class="pijl" d="M${van.x} ${van.y} C${van.x+dx} ${van.y} ${naar.x-dx} ${naar.y} ${naar.x} ${naar.y}"/>`; }
-  for(const n of data.nodes){ const p=pos(n);
-    const kl=['knoop',n.soort, n.soort==='systeem'&&!n.gebouwd?'niet':'', n.id===gekozen?'gekozen':''].join(' ');
-    const badge = n.geraakt===true? `<text x="${W-12}" y="16" text-anchor="end" class="badge ja">✓ test</text>`
-                : n.geraakt===false? `<text x="${W-12}" y="16" text-anchor="end" class="badge nee">○ geen test</text>` : '';
-    h+=`<g class="${kl}" data-id="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect width="${W}" height="${H}"/>
-      <text x="12" y="16" class="soort">${esc(n.soort)}</text>${badge}
-      <text x="12" y="33">${esc(knip(n.naam,30))}</text>
-      <text x="12" y="48" class="doc">${esc(knip(n.doc,36))}</text></g>`; }
-  wereld.innerHTML=h;
-  filter();
-  wereld.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`);
-  wereld.querySelectorAll('.knoop').forEach(g=>{
-    g.addEventListener('click',e=>{ gekozen=g.dataset.id; toon(by[gekozen]); teken(); });
-    g.addEventListener('dblclick',e=>{ const n=by[g.dataset.id]; if(n.soort==='systeem'&&n.gebouwd) laad(n.module); });
-  });
-}
-function tekst(n){ return [n.naam,n.doc,n.soort,n.module,...(n.bronnen||[]),...(n.velden||[]),...(n.uitkomsten||[])].join(' ').toLowerCase(); }
-function filter(){
-  const q=document.getElementById('zoek').value.trim().toLowerCase();
-  const by={}; (data?.nodes||[]).forEach(n=>by[n.id]=n);
-  wereld.querySelectorAll('.knoop').forEach(g=>g.classList.toggle('dim', !!q && !tekst(by[g.dataset.id]).includes(q)));
-}
-document.getElementById('zoek').addEventListener('input', filter);
-function toon(n){
-  if(n.soort==='systeem'||n.soort==='bron'||n.soort==='uitvoer'){
-    paneel.innerHTML=`<h3>${esc(n.naam)}</h3><div class="meta">${esc(n.soort)}</div><dl>
-      ${n.doc!==undefined?`<dt>${n.soort==='systeem'?'permissie':'toelichting'}</dt><dd>${esc(n.doc)||'—'}</dd>`:''}
-      ${n.residentie?`<dt>data staat</dt><dd>${esc(n.residentie)}</dd>`:''}
-      ${n.verlaat_tenant?`<dt>verlaat tenant</dt><dd>${esc(n.verlaat_tenant)}</dd>`:''}
-      ${n.bronnen?.length?`<dt>leest</dt><dd>${esc(n.bronnen.join(', '))}</dd>`:''}
-      ${n.velden?.length?`<dt>velden (gemeten)</dt><dd>${n.velden.map(v=>`<code>${esc(v)}</code>`).join(' ')}</dd>`:''}
-      ${n.uitkomsten?.length?`<dt>meldt</dt><dd>${n.uitkomsten.map(v=>`<code>${esc(v)}</code>`).join(' ')}</dd>`:''}
-      ${n.module?`<dt>module</dt><dd><code>${esc(n.module)}.py</code> ${n.gebouwd?'— dubbelklik om naar binnen te gaan':'— nog niet gebouwd'}</dd>`:''}</dl>`;
-    return; }
-  const dek = n.geraakt===true?' · door de test geraakt': n.geraakt===false?' · door geen test geraakt':'';
-  paneel.innerHTML=`<h3>${esc(n.naam)}</h3><div class="meta">${esc(n.soort)} · regel ${n.regels[0]}–${n.regels[1]}${dek}</div><pre>${esc(n.code)}</pre>`;
-}
-const INLINE = window.STROOM || null;   // gezet door --export; anders live van de server
-async function laad(module){
-  if(INLINE){ data=INLINE[module||'']; }
-  else { const run=new URLSearchParams(location.search).get('run')==='1';
-    const r=await fetch('/flow.json?'+(module?'module='+encodeURIComponent(module)+'&':'')+(run?'run=1':'')); data=await r.json(); }
-  gekozen=null; view={x:0,y:0,k:1};
-  titel.textContent=data.titel+(data.fout?' — '+data.fout:''); terug.hidden=!module;
-  paneel.innerHTML='<p class="leeg">Klik op een blok.</p>'; teken();
-}
-terug.onclick=()=>laad(null);
-let sleep=null;
-svg.addEventListener('mousedown',e=>{ sleep={x:e.clientX-view.x,y:e.clientY-view.y}; });
-window.addEventListener('mousemove',e=>{ if(!sleep) return; view.x=e.clientX-sleep.x; view.y=e.clientY-sleep.y;
-  wereld.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); });
-window.addEventListener('mouseup',()=>sleep=null);
-svg.addEventListener('wheel',e=>{ e.preventDefault(); const k=Math.min(2.5,Math.max(.3,view.k*(e.deltaY<0?1.1:.9)));
-  view.x=e.offsetX-(e.offsetX-view.x)*k/view.k; view.y=e.offsetY-(e.offsetY-view.y)*k/view.k; view.k=k;
-  wereld.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); },{passive:false});
-laad(null);
-</script></body></html>"""
+DIST = pathlib.Path(__file__).resolve().parent / "web" / "dist"
+MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
+        ".svg": "image/svg+xml", ".map": "application/json"}
+
+
+def _dist_bestand(pad):
+    """Het bestand onder web/dist voor een /flow[/...]-pad, of None. Nooit erbuiten."""
+    rel = pad[len("/flow"):].lstrip("/") or "index.html"
+    doel = (DIST / rel).resolve()
+    if DIST.resolve() not in doel.parents or not doel.is_file():
+        return None
+    return doel
+
+
+def stroom_html(inline=None):
+    """index.html met JS en CSS erin gebakken; met `inline` ook alle niveaus (voor --export)."""
+    html_ = (DIST / "index.html").read_text(encoding="utf-8")
+    for m in re.finditer(r'<script type="module"[^>]*src="([^"]+)"[^>]*></script>', html_):
+        src = (DIST / m.group(1).replace("/flow/", "", 1)).read_text(encoding="utf-8")
+        html_ = html_.replace(m.group(0), "<script type=\"module\">" + src + "</script>")
+    for m in re.finditer(r'<link rel="stylesheet"[^>]*href="([^"]+)"[^>]*>', html_):
+        css = (DIST / m.group(1).replace("/flow/", "", 1)).read_text(encoding="utf-8")
+        html_ = html_.replace(m.group(0), "<style>" + css + "</style>")
+    if inline is not None:
+        html_ = html_.replace("<head>", "<head><script>window.STROOM=" +
+                              json.dumps(inline, ensure_ascii=False) + "</script>", 1)
+    return html_
 
 
 def export(manifest_pad, map_, run_tests=False):
@@ -415,9 +313,8 @@ def export(manifest_pad, map_, run_tests=False):
     alle = {"": flow.stroom(m)}
     for sys_ in m.get("systemen", []):
         alle[sys_["module"]] = flow.stroom(m, sys_["module"])
-    inline = "<script>window.STROOM=" + json.dumps(alle, ensure_ascii=False) + "</script>\n<script>"
     stroom = map_ / f"{naam}-stroom.html"
-    stroom.write_text(FLOW_PAGE.replace("<script>", inline, 1), encoding="utf-8")
+    stroom.write_text(stroom_html(alle), encoding="utf-8")
     return [kamer, stroom]
 
 
@@ -451,6 +348,44 @@ def check(m):
     return 0 if not rood else 1
 
 
+def xy(m):
+    """Eén regel voor xyOps: data voor buckets en workflows, een tabel voor het jobrapport.
+
+    Exit 1 alleen op een rode grens of een gebroken keten — dat is 'stop'. Rode
+    tests zijn een waarschuwing: test_entra is rood zolang az niet ingelogd is en
+    dat mag geen alarm om het kwartier worden.
+    """
+    sam = m["samenvatting"]
+    rows = [[str(l["nr"]), l["naam"], l["lamp"]] for l in m["lagen"]]
+    rows += [[str(s_["nr"]), s_["naam"],
+              "niet gebouwd" if not s_["gebouwd"] else ("groen" if s_["ok"] else "rood")]
+             for s_ in m["systemen"]]
+    rood = [f"{s_['naam']}: " + "; ".join(f"{k} — {c['bewijs']}" for k, c in s_["controles"].items()
+                                          if c["ok"] is False) for s_ in m["systemen"] if not s_["ok"]]
+    rood += [f"permissie die niemand claimt: {v['permissie']} in {v['bestand']}"
+             for v in m["vreemde_permissies"]]
+    rood += [f"keten gebroken: {a['naam']} — {a['uitvoer']}" for a in m["audits"] if a["ok"] is False]
+    waarschuwing = [f"test rood: {t['bestand']} — {t['laatste_regel'][:120]}"
+                    for t in m["tests"] if t["groen"] is False]
+    waarschuwing += [f"sonde niet uitvoerbaar: {a['naam']} — {a['uitvoer']}"
+                     for a in m["audits"] if a["ok"] is None]
+    uit = {
+        "xy": True,
+        "data": {**{k: (int(v) if isinstance(v, bool) else v) for k, v in sam.items()
+                    if v is not None}, "gemeten_op": m["gemeten_op"], "project": m["project"]},
+        "table": {"title": "Lagen en systemen", "cols": ["#", "naam", "lamp"], "rows": rows,
+                  "caption": f"gemeten {m['gemeten_op']}"},
+        "markdown": "\n".join(["### Rood"] + [f"- {r}" for r in rood] if rood else ["Niets rood."])
+                    + ("\n\n### Waarschuwingen\n" + "\n".join(f"- {w}" for w in waarschuwing)
+                       if waarschuwing else ""),
+    }
+    if waarschuwing:
+        uit["warning"] = f"{len(waarschuwing)} waarschuwing(en)"
+    live.noteer("meting", f"gemeten {m['gemeten_op']}: {sam['grenzen_rood']} grenzen rood, "
+                f"{sam['tests_rood']} tests rood", ok=not rood)
+    return uit, (1 if rood else 0)
+
+
 def _overrides(args):
     uit = {}
     for i, a in enumerate(args):
@@ -465,8 +400,24 @@ def serve(manifest_pad, port=PORT, overrides=None):
         def do_GET(self):
             u = urlparse(self.path)
             run = parse_qs(u.query).get("run", ["0"])[0] == "1"
-            if u.path == "/flow":
-                body, ctype = FLOW_PAGE.encode(), "text/html; charset=utf-8"
+            if u.path == "/events":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                try:
+                    for e in live.events(manifest_pad, overrides):
+                        self.wfile.write(f"data: {json.dumps(e, ensure_ascii=False)}\n\n".encode())
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+            if u.path == "/flow" or u.path.startswith("/flow/"):
+                bestand = _dist_bestand(u.path)
+                if bestand is None:
+                    self.send_error(404)
+                    return
+                body, ctype = bestand.read_bytes(), MIME.get(bestand.suffix, "application/octet-stream")
             elif u.path == "/flow.json":
                 module = parse_qs(u.query).get("module", [None])[0]
                 body = json.dumps(flow.stroom(meet.laad(manifest_pad, overrides), module, run),
@@ -507,5 +458,13 @@ if __name__ == "__main__":
         serve(manifest, port=port, overrides=ov)
     elif "--check" in args:
         sys.exit(check(meet.meet(meet.laad(manifest, ov), run_tests="--run" in args)))
+    elif "--xy" in args:
+        uit, code = xy(meet.meet(meet.laad(manifest, ov), run_tests="--run" in args))
+        print(json.dumps(uit, ensure_ascii=False))
+        sys.exit(code)
+    elif "--tally" in args:
+        naam = args[args.index("--tally") + 1]
+        v = meet.meet(meet.laad(manifest, ov), run_tests="--run" in args)["samenvatting"][naam]
+        print("" if v is None else int(v))
     else:
         print(html(meet.meet(meet.laad(manifest, ov), run_tests="--run" in args)))

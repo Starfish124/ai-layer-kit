@@ -1,0 +1,38 @@
+:root { --teal:#009b8f; --teal-deep:#007c72; --teal-tint:#e3f4f2; --blue:#255fa9; --warn:#b97b17; --warn-tint:#fdf5e3;
+  --danger:#cf3f3a; --good:#1d7d43; --paper:#f2f5f7; --card:#fff; --ink:#10131a; --ink-2:#3d4453; --mute:#79808f;
+  --faint:#a5abb8; --line:#e3e7ee;
+  --sans:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+* { box-sizing:border-box } body { margin:0; font:14px/1.5 var(--sans); color:var(--ink); background:var(--paper) }
+.app { height:100vh; display:grid; grid-template-rows:auto 1fr; grid-template-columns:1fr 420px }
+header { grid-column:1/3; display:flex; gap:14px; align-items:center; padding:8px 16px; border-bottom:1px solid var(--line); background:var(--card) }
+header .eyebrow { font:12px var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--teal-deep) }
+header b { font-size:16px } header a { font:12px var(--mono); color:var(--blue); cursor:pointer }
+header input[type=text], header input:not([type]) { font:12px var(--mono); padding:4px 10px; border:1px solid var(--line); border-radius:999px; background:var(--paper); width:300px }
+header label { font:12px var(--mono); color:var(--mute); display:flex; gap:6px; align-items:center }
+header .hint { margin-left:auto; font:12px var(--mono); color:var(--mute) }
+.canvas { position:relative }
+aside { border-left:1px solid var(--line); background:var(--card); overflow:auto; padding:14px 16px }
+aside h3 { margin:0 0 2px; font:700 14px var(--mono) } aside h4 { margin:18px 0 6px; font:11px var(--mono); letter-spacing:.07em; text-transform:uppercase; color:var(--mute) }
+aside .meta { font:11px var(--mono); color:var(--mute); margin-bottom:10px }
+aside pre { margin:0; font:11.5px/1.5 var(--mono); white-space:pre-wrap; word-break:break-word; background:var(--paper); padding:12px; border-radius:10px }
+aside dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; font-size:13px } aside dt { font:11px var(--mono); color:var(--mute); text-transform:uppercase; letter-spacing:.06em } aside dd { margin:0 }
+aside code { font:12px var(--mono); background:var(--paper); padding:1px 5px; border-radius:4px; margin-right:4px }
+.leeg { color:var(--mute); font-size:13px }
+.feed { list-style:none; margin:0; padding:0; font-size:12px } .feed li { padding:4px 0; border-bottom:1px solid var(--line) }
+.feed .t { font:11px var(--mono); color:var(--faint) } .feed .s { font:10px var(--mono); color:var(--teal-deep); text-transform:uppercase; letter-spacing:.06em }
+.feed li.rood { color:var(--danger) } .feed li.groen { color:var(--good) }
+dd.groen { color:var(--good) } dd.rood { color:var(--danger) } dd.bezig { color:var(--warn) }
+
+.blok { width:220px; min-height:74px; background:var(--card); border:1.5px solid var(--line); border-radius:10px; padding:8px 12px; font-size:12px; position:relative }
+.blok.bron { border-style:dashed; border-color:var(--faint) } .blok.systeem { border-color:var(--teal) } .blok.systeem.niet { border-color:var(--faint); background:var(--paper) }
+.blok.uitvoer { border-color:var(--good) } .blok.data { border-color:var(--warn); background:var(--warn-tint) } .blok.functie { border-color:var(--blue) }
+.blok.gekozen { border-width:3px } .blok.dim { opacity:.15 }
+.blok .kop { display:flex; justify-content:space-between } .blok .soort { font:9px var(--mono); color:var(--faint); letter-spacing:.08em; text-transform:uppercase }
+.blok .naam { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .blok .doc { font:10px var(--mono); color:var(--mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.blok .badge { font:600 10px var(--mono) } .badge.ja { color:var(--good) } .badge.nee { color:var(--faint) }
+.blok .live { margin-top:4px; font:10px var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.live.bezig { color:var(--warn) } .live.groen { color:var(--good) } .live.rood { color:var(--danger) }
+.blok.live-bezig { box-shadow:0 0 0 3px var(--warn-tint); animation:puls 1.4s ease-in-out infinite } .blok.live-groen { box-shadow:0 0 0 3px #e6f3ea } .blok.live-rood { box-shadow:0 0 0 3px #fbeae9 }
+@keyframes puls { 0%,100% { box-shadow:0 0 0 3px var(--warn-tint) } 50% { box-shadow:0 0 0 7px var(--warn-tint) } }
+.react-flow__handle { opacity:0 } .react-flow__minimap { border:1px solid var(--line); border-radius:8px }
