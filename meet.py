@@ -36,7 +36,7 @@ PERMISSIE = re.compile(r"\b(?:Mail|MailboxSettings|Files|Sites|User|Directory|"
 SCHRIJF_PREFIX = ("os.remove", "os.unlink", "os.rename", "os.replace", "os.makedirs",
                   "os.mkdir", "os.rmdir", "os.system", "os.truncate", "shutil.",
                   "subprocess.", "smtplib.", "imaplib.", "ftplib.")
-SCHRIJF_METHODE = {"write_text", "write_bytes", "unlink", "rename", "replace", "mkdir",
+SCHRIJF_METHODE = {"write_text", "write_bytes", "unlink", "rename", "mkdir",
                    "rmdir", "touch", "sendmail", "send_message"}
 NETWERK_PREFIX = ("urllib.request.", "http.client.", "socket.", "ssl.")
 KLOK_PREFIX = ("datetime.now", "datetime.utcnow", "datetime.today", "date.today",

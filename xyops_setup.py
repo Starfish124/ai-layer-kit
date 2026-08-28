@@ -82,6 +82,45 @@ def bestaande(cfg):
     return {}
 
 
+WORKFLOW_TITEL = "Controlekamer · meet → ketens → export"
+
+
+def workflow(cfg, er_al):
+    """Eén visuele workflow over drie bestaande events: alleen succes stroomt door.
+
+    Node-vorm en velden komen uit lib/util.js en lib/workflow.js van xyOps zelf:
+    een trigger-node heeft geen data, een event-node wijst met `data.event` naar
+    een event (dat een handmatige trigger nodig heeft), een verbinding draagt
+    `condition`. Posities hier zijn cosmetisch — dit is xyOps' eigen canvas.
+    """
+    ids = {t: er_al[t]["id"] for t in er_al if t.startswith("Controlekamer · ")}
+    meet = ids["Controlekamer · meet (elk kwartier)"]
+    ketens = ids["Controlekamer · ketens verifiëren (elk uur)"]
+    export = ids["Controlekamer · export naar Downloads (dagelijks 18:00)"]
+    nodes = [
+        {"id": "ntrig", "type": "trigger", "x": 40, "y": 140},
+        {"id": "nmeet", "type": "event", "x": 300, "y": 140, "data": {"event": meet}},
+        {"id": "nket", "type": "event", "x": 560, "y": 140, "data": {"event": ketens}},
+        {"id": "nexp", "type": "event", "x": 820, "y": 140, "data": {"event": export}},
+    ]
+    conns = [
+        {"id": "c1", "source": "ntrig", "dest": "nmeet"},
+        {"id": "c2", "source": "nmeet", "dest": "nket", "condition": "success"},
+        {"id": "c3", "source": "nket", "dest": "nexp", "condition": "success"},
+    ]
+    body = {"title": WORKFLOW_TITEL, "type": "workflow", "enabled": True, "category": "general", "plugin": "_workflow",
+            "targets": ["main"], "algo": "random",
+            "triggers": [{"id": "ntrig", "type": "manual", "enabled": True}],
+            "workflow": {"nodes": nodes, "connections": conns},
+            "limits": [{"type": "time", "enabled": True, "duration": 1200}]}
+    if WORKFLOW_TITEL in er_al:
+        api(cfg, "update_event", {"id": er_al[WORKFLOW_TITEL]["id"], **body})
+        print("bijgewerkt:", WORKFLOW_TITEL)
+    else:
+        d = api(cfg, "create_event", body)
+        print("aangemaakt:", WORKFLOW_TITEL, d.get("id", ""))
+
+
 def main():
     if not CFG.exists():
         sys.exit(f"geen {CFG} — maak eerst een API-sleutel aan in xyOps")
@@ -100,6 +139,7 @@ def main():
         else:
             d = api(cfg, "create_event", body)
             print("aangemaakt:", ev["title"], d.get("id", ""))
+    workflow(cfg, bestaande(cfg))
 
 
 if __name__ == "__main__":
