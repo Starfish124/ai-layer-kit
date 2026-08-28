@@ -11,6 +11,7 @@ houdt het zo — een pagina die zelf meet, liegt op den duur.
     python3.12 controlroom.py <layers.json> --repo systemen=$PWD --serve --port 7416
     python3.12 controlroom.py <layers.json> --repo systemen=$PWD --run --check
     python3.12 controlroom.py <layers.json> --run --xy         # één JSON-regel voor een xyOps-job
+    python3.12 controlroom.py <layers.json> --systeem post     # één systeem, één xyOps-knoop
     python3.12 controlroom.py <layers.json> --tally grenzen_rood   # één getal voor een xyOps-monitor
     curl -N http://127.0.0.1:7415/events                          # de live feitenstroom (SSE)
         # meet een worktree i.p.v. de hoofdrepo; exit 1 als daar iets rood is (Vibe Kanban-poort)
@@ -386,6 +387,52 @@ def xy(m):
     return uit, (1 if rood else 0)
 
 
+def systeem_xy(m, module):
+    """Eén systeem gemeten, als één xyOps-jobregel.
+
+    Dit is wat een knoop op het xyOps-canvas is: geen plaatje van een systeem maar
+    de meting ervan, die draait, kleurt en een rapport achterlaat. Rood = deze
+    module heeft een grens overschreden of zijn eigen test faalt; dat is iets
+    anders dan `--xy`, waar een rode test infrastructuur kan zijn (az niet ingelogd).
+    """
+    s_ = next((x for x in m.get("systemen", []) if x["module"] == module), None)
+    if s_ is None:
+        return {"xy": True, "warning": f"onbekend systeem: {module}"}, 0
+
+    g = meet.grens_status(s_, m["repos"])
+    repo = m["repos"][s_["repo"]]
+    test = f"test_{module}.py"
+    if (repo / test).exists():
+        groen, staart = meet._test_draait(repo, test)
+    else:
+        groen, staart = None, "geen test"
+
+    rows = [[meet_naam, {True: "groen", False: "ROOD", None: "n.v.t."}[c["ok"]], c["bewijs"] or ""]
+            for meet_naam, c in g["controles"].items()]
+    rows.append(["test", {True: "groen", False: "ROOD", None: "geen"}[groen], staart[:120]])
+
+    rood = [f"{k} — {c['bewijs']}" for k, c in g["controles"].items() if c["ok"] is False]
+    if groen is False:
+        rood.append(f"test rood — {staart[:150]}")
+
+    uit = {
+        "xy": True,
+        "data": {"systeem": s_["nr"], "module": module, "naam": s_["naam"],
+                 "gebouwd": int(g["gebouwd"]), "grens_ok": int(g["ok"]),
+                 "test_groen": None if groen is None else int(groen),
+                 "permissies": ", ".join(s_.get("permissies", [])) or "geen",
+                 "verlaat_tenant": s_.get("verlaat_tenant", "")},
+        "table": {"title": f"Systeem {s_['nr']} · {s_['naam']}",
+                  "cols": ["controle", "uitslag", "bewijs"], "rows": rows,
+                  "caption": f"{module}.py · leest: " + (", ".join(s_.get("bronnen", [])) or "—")},
+        "markdown": ("### Rood\n" + "\n".join(f"- {r}" for r in rood)) if rood
+                    else f"Niets rood in `{module}.py`.",
+    }
+    if not g["gebouwd"]:
+        uit["warning"] = "nog niet gebouwd"
+    return uit, (1 if rood else 0)
+
+
 def _overrides(args):
     uit = {}
     for i, a in enumerate(args):
@@ -461,6 +508,10 @@ if __name__ == "__main__":
         serve(manifest, port=port, overrides=ov)
     elif "--check" in args:
         sys.exit(check(meet.meet(meet.laad(manifest, ov), run_tests="--run" in args)))
+    elif "--systeem" in args:
+        uit, code = systeem_xy(meet.laad(manifest, ov), args[args.index("--systeem") + 1])
+        print(json.dumps(uit, ensure_ascii=False))
+        sys.exit(code)
     elif "--xy" in args:
         uit, code = xy(meet.meet(meet.laad(manifest, ov), run_tests="--run" in args))
         print(json.dumps(uit, ensure_ascii=False))

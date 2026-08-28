@@ -108,17 +108,83 @@ def workflow(cfg, er_al):
         {"id": "c2", "source": "nmeet", "dest": "nket", "condition": "success"},
         {"id": "c3", "source": "nket", "dest": "nexp", "condition": "success"},
     ]
-    body = {"title": WORKFLOW_TITEL, "type": "workflow", "enabled": True, "category": "general", "plugin": "_workflow",
+    body = {"title": WORKFLOW_TITEL, "type": "workflow", "enabled": True, "category": "general",
             "targets": ["main"], "algo": "random",
             "triggers": [{"id": "ntrig", "type": "manual", "enabled": True}],
             "workflow": {"nodes": nodes, "connections": conns},
             "limits": [{"type": "time", "enabled": True, "duration": 1200}]}
+    # ⚠️ `update_event` strijkt `type: "workflow"` eraf — daarna faalt de job met
+    # "Plugin not found: _workflow". Een workflow vervang je dus, je werkt hem niet bij.
     if WORKFLOW_TITEL in er_al:
-        api(cfg, "update_event", {"id": er_al[WORKFLOW_TITEL]["id"], **body})
-        print("bijgewerkt:", WORKFLOW_TITEL)
-    else:
-        d = api(cfg, "create_event", body)
-        print("aangemaakt:", WORKFLOW_TITEL, d.get("id", ""))
+        api(cfg, "delete_event", {"id": er_al[WORKFLOW_TITEL]["id"]})
+    d = api(cfg, "create_event", body)
+    print("(her)aangemaakt:", WORKFLOW_TITEL, d.get("id", ""))
+
+
+STROOM_TITEL = "Durabo AI-laag · Stroom"
+
+
+def stroom_workflow(cfg, er_al):
+    """De Stroom als xyOps-workflow: elke knoop is een meting die draait.
+
+    Dit is geen plaatje van de systemen. Elke systeemknoop is een echte job die
+    `controlroom.py --systeem <module>` draait op de satelliet: hij licht op
+    terwijl hij loopt, kleurt rood als een grens of een test valt, en laat een
+    jobrapport achter met de tabel en het bewijs. De join wacht op alle twaalf,
+    de laatste knoop zet de telling in de bucket.
+
+    De knopen komen uit `layers.json` — niet met de hand geplaatst, net als op de
+    eigen Stroom-pagina (ADR-005/007). Een systeem erbij in de manifest is een
+    knoop erbij hier.
+    """
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    systemen = manifest.get("systemen", [])
+
+    nodes = [
+        {"id": "ntrig", "type": "trigger", "x": 40, "y": 60 + len(systemen) * 44},
+        {"id": "nnote", "type": "note", "x": 30, "y": 20, "data": {"text":
+            "**Elke knoop is een meting, geen plaatje.**\n\n"
+            "Een systeemknoop draait `controlroom.py --systeem <module>`: hij wordt "
+            "rood als de code een verboden import doet, ergens schrijft, de klok "
+            "leest, of als zijn eigen test valt. Groen betekent gemeten, niet beloofd."}},
+    ]
+    conns = []
+    for i, s_ in enumerate(systemen):
+        nid = "n" + s_["module"]
+        nodes.append({
+            "id": nid, "type": "job", "x": 380, "y": 60 + i * 88,
+            "data": {"label": f"{s_['nr']} · {s_['naam']}", "icon": "",
+                     "category": "general", "targets": ["main"], "algo": "random",
+                     "plugin": "shellplug",
+                     "params": {"script": script("--systeem", s_["module"]), "annotate": False}},
+        })
+        conns.append({"id": f"ct{i}", "source": "ntrig", "dest": nid})
+        # 'complete' = altijd; een rood systeem mag de samenvatting niet tegenhouden,
+        # anders zie je juist niets op de dag dat er iets mis is.
+        conns.append({"id": f"cj{i}", "source": nid, "dest": "njoin", "condition": "complete"})
+
+    nodes.append({"id": "njoin", "type": "controller", "x": 780,
+                  "y": 60 + len(systemen) * 44, "data": {"controller": "join"}})
+    nodes.append({"id": "nsam", "type": "job", "x": 1060, "y": 60 + len(systemen) * 44,
+                  "data": {"label": "Samenvatting → bucket", "icon": "",
+                           "category": "general", "targets": ["main"], "algo": "random",
+                           "plugin": "shellplug",
+                           "params": {"script": script("--run", "--xy"), "annotate": False}}})
+    conns.append({"id": "cs", "source": "njoin", "dest": "nsam"})
+
+    body = {"title": STROOM_TITEL, "type": "workflow", "enabled": True, "category": "general",
+            "targets": ["main"], "algo": "random",
+            "triggers": [{"id": "ntrig", "type": "manual", "enabled": True},
+                         {"type": "schedule", "enabled": True, "hours": [8], "minutes": [0],
+                          "timezone": "Europe/Amsterdam"}],
+            "workflow": {"nodes": nodes, "connections": conns},
+            "limits": [{"type": "time", "enabled": True, "duration": 1800}]}
+
+    # update_event strijkt `type` eraf, dus vervangen = verwijderen en opnieuw maken.
+    if STROOM_TITEL in er_al:
+        api(cfg, "delete_event", {"id": er_al[STROOM_TITEL]["id"]})
+    d = api(cfg, "create_event", body)
+    print(f"aangemaakt: {STROOM_TITEL} ({len(systemen)} systeemknopen) {d.get('id','')}")
 
 
 def main():
@@ -140,6 +206,7 @@ def main():
             d = api(cfg, "create_event", body)
             print("aangemaakt:", ev["title"], d.get("id", ""))
     workflow(cfg, bestaande(cfg))
+    stroom_workflow(cfg, bestaande(cfg))
 
 
 if __name__ == "__main__":
