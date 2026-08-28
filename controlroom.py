@@ -7,9 +7,11 @@ houdt het zo — een pagina die zelf meet, liegt op den duur.
     python3.12 controlroom.py <layers.json> --html          # naar stdout
     python3.12 controlroom.py <layers.json> --run --html    # mét tests
     python3.12 controlroom.py <layers.json> --serve         # http://127.0.0.1:7415
+    python3.12 controlroom.py <layers.json> --run --export ~/Downloads   # twee losse HTML's
 """
 
 import json
+import pathlib
 import sys
 from html import escape as esc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -351,9 +353,11 @@ function toon(n){
     return; }
   paneel.innerHTML=`<h3>${esc(n.naam)}</h3><div class="meta">${esc(n.soort)} · regel ${n.regels[0]}–${n.regels[1]}</div><pre>${esc(n.code)}</pre>`;
 }
+const INLINE = window.STROOM || null;   // gezet door --export; anders live van de server
 async function laad(module){
-  const r=await fetch('/flow.json'+(module?'?module='+encodeURIComponent(module):''));
-  data=await r.json(); gekozen=null; view={x:0,y:0,k:1};
+  if(INLINE){ data=INLINE[module||'']; }
+  else { const r=await fetch('/flow.json'+(module?'?module='+encodeURIComponent(module):'')); data=await r.json(); }
+  gekozen=null; view={x:0,y:0,k:1};
   titel.textContent=data.titel+(data.fout?' — '+data.fout:''); terug.hidden=!module;
   paneel.innerHTML='<p class="leeg">Klik op een blok.</p>'; teken();
 }
@@ -368,6 +372,23 @@ svg.addEventListener('wheel',e=>{ e.preventDefault(); const k=Math.min(2.5,Math.
   wereld.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); },{passive:false});
 laad(null);
 </script></body></html>"""
+
+
+def export(manifest_pad, map_, run_tests=False):
+    """Twee losse HTML-bestanden die zonder server werken — om te delen."""
+    m = meet.laad(manifest_pad)
+    map_ = pathlib.Path(map_).expanduser()
+    map_.mkdir(parents=True, exist_ok=True)
+    naam = m.get("project", "project").lower()
+    kamer = map_ / f"{naam}-controlekamer.html"
+    kamer.write_text(html(meet.meet(m, run_tests)), encoding="utf-8")
+    alle = {"": flow.stroom(m)}
+    for sys_ in m.get("systemen", []):
+        alle[sys_["module"]] = flow.stroom(m, sys_["module"])
+    inline = "<script>window.STROOM=" + json.dumps(alle, ensure_ascii=False) + "</script>\n<script>"
+    stroom = map_ / f"{naam}-stroom.html"
+    stroom.write_text(FLOW_PAGE.replace("<script>", inline, 1), encoding="utf-8")
+    return [kamer, stroom]
 
 
 # ── server ────────────────────────────────────────────────────────────────────
@@ -411,7 +432,10 @@ if __name__ == "__main__":
     if not args:
         sys.exit(__doc__)
     manifest = args[0]
-    if "--serve" in args:
+    if "--export" in args:
+        for pad in export(manifest, args[args.index("--export") + 1], "--run" in args):
+            print(pad)
+    elif "--serve" in args:
         serve(manifest)
     else:
         print(html(meet.meet(meet.laad(manifest), run_tests="--run" in args)))
