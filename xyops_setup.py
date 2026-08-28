@@ -140,13 +140,24 @@ def stroom_workflow(cfg, er_al):
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     systemen = manifest.get("systemen", [])
 
+    midden = 60 + len(systemen) * 44
+    # Elke trigger krijgt zijn eigen knoop: de tekenaar zoekt per trigger-knoop de
+    # trigger met hetzelfde id, en de motor start bij de knoop van de trigger die
+    # vuurde. Een trigger zónder knoop start dus een lege workflow.
+    triggers = [{"id": "ntrigman", "type": "manual", "enabled": True},
+                {"id": "ntrigdag", "type": "schedule", "enabled": True, "hours": [8],
+                 "minutes": [0], "timezone": "Europe/Amsterdam"}]
     nodes = [
-        {"id": "ntrig", "type": "trigger", "x": 40, "y": 60 + len(systemen) * 44},
-        {"id": "nnote", "type": "note", "x": 30, "y": 20, "data": {"text":
+        {"id": "ntrigman", "type": "trigger", "x": 40, "y": midden - 60},
+        {"id": "ntrigdag", "type": "trigger", "x": 40, "y": midden + 60},
+        # ⚠️ de tekenaar leest `data.body` (niet `text`): een ander veld laat
+        # `undefined.trim()` klappen, en dan tekent de héle kaart niets meer.
+        {"id": "nnote", "type": "note", "x": 20, "y": 20, "data": {"wide": True, "body":
             "**Elke knoop is een meting, geen plaatje.**\n\n"
-            "Een systeemknoop draait `controlroom.py --systeem <module>`: hij wordt "
-            "rood als de code een verboden import doet, ergens schrijft, de klok "
-            "leest, of als zijn eigen test valt. Groen betekent gemeten, niet beloofd."}},
+            "Een systeemknoop draait `controlroom.py --systeem <module>`: rood zodra die "
+            "module een verboden import doet, ergens schrijft, de klok leest, of zijn "
+            "eigen test valt. Groen betekent gemeten, niet beloofd.\n\n"
+            "De knopen komen uit `layers.json`; met de hand bijtekenen heeft geen zin."}},
     ]
     conns = []
     for i, s_ in enumerate(systemen):
@@ -158,14 +169,15 @@ def stroom_workflow(cfg, er_al):
                      "plugin": "shellplug",
                      "params": {"script": script("--systeem", s_["module"]), "annotate": False}},
         })
-        conns.append({"id": f"ct{i}", "source": "ntrig", "dest": nid})
+        conns.append({"id": f"ctm{i}", "source": "ntrigman", "dest": nid})
+        conns.append({"id": f"ctd{i}", "source": "ntrigdag", "dest": nid})
         # 'complete' = altijd; een rood systeem mag de samenvatting niet tegenhouden,
         # anders zie je juist niets op de dag dat er iets mis is.
         conns.append({"id": f"cj{i}", "source": nid, "dest": "njoin", "condition": "complete"})
 
     nodes.append({"id": "njoin", "type": "controller", "x": 780,
-                  "y": 60 + len(systemen) * 44, "data": {"controller": "join"}})
-    nodes.append({"id": "nsam", "type": "job", "x": 1060, "y": 60 + len(systemen) * 44,
+                  "y": midden, "data": {"controller": "join"}})
+    nodes.append({"id": "nsam", "type": "job", "x": 1060, "y": midden,
                   "data": {"label": "Samenvatting → bucket", "icon": "",
                            "category": "general", "targets": ["main"], "algo": "random",
                            "plugin": "shellplug",
@@ -174,9 +186,7 @@ def stroom_workflow(cfg, er_al):
 
     body = {"title": STROOM_TITEL, "type": "workflow", "enabled": True, "category": "general",
             "targets": ["main"], "algo": "random",
-            "triggers": [{"id": "ntrig", "type": "manual", "enabled": True},
-                         {"type": "schedule", "enabled": True, "hours": [8], "minutes": [0],
-                          "timezone": "Europe/Amsterdam"}],
+            "triggers": triggers,
             "workflow": {"nodes": nodes, "connections": conns},
             "limits": [{"type": "time", "enabled": True, "duration": 1800}]}
 
