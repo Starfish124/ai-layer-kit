@@ -221,31 +221,112 @@ def _git_repo(pad, bestanden):
     return pad
 
 
-def test_nul_geschreven_bestanden_is_rood():
+def _git_tak(repo, tak, bestanden):
+    """Een tak in deze repo — en nadrukkelijk géén worktree ervoor."""
+    subprocess.run(["git", "checkout", "-q", "-b", tak], cwd=repo, check=True)
+    for naam, inhoud in bestanden.items():
+        (repo / naam).write_text(inhoud, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", tak], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
+    return tak
+
+
+def test_een_tak_die_niets_toevoegt_is_rood():
+    """Regel 1 meet de diff van de tak, niet het aantal Writes in het transcript."""
+    repo = _git_repo(TMP / "leegtak" / "repo", {"a.py": "x = 1\n"})
+    subprocess.run(["git", "branch", "vk/leeg"], cwd=repo, check=True)
     run = {"geschreven": [], "cleanup": ("completed", 0), "status": "completed",
-           "worktree": None, "repo_pad": None, "transcript": "x"}
-    assert any("geen enkel bestand" in r for r in waarneming.oordeel(run, {})), \
-        waarneming.oordeel(run, {})
+           "branch": "vk/leeg", "worktree": None, "repo_pad": str(repo), "transcript": "x"}
+    rood, gemeten = waarneming.oordeel(run, {"systemen": repo})
+    assert any("geen enkel bestand" in r for r in rood), rood
+    assert gemeten["schreef"] is True, gemeten
+
+
+def test_een_agent_die_met_een_heredoc_schrijft_is_niet_rood():
+    """`cat > bestand <<EOF` laat geen Write achter in het transcript, wel een diff."""
+    repo = _git_repo(TMP / "heredoc" / "repo", {"a.py": "x = 1\n"})
+    _git_tak(repo, "vk/hd", {"b.py": "y = 2\n"})
+    run = {"geschreven": [], "cleanup": ("completed", 0), "status": "completed",
+           "branch": "vk/hd", "worktree": None, "repo_pad": str(repo), "transcript": "x"}
+    rood, gemeten = waarneming.oordeel(run, {"systemen": repo})
+    assert rood == [], rood
+    assert gemeten == {"schreef": True, "poort": True, "testregressie": True}, gemeten
 
 
 def test_een_poort_die_nooit_draaide_is_rood():
     run = {"geschreven": ["a.py"], "cleanup": None, "status": "completed",
-           "worktree": None, "repo_pad": None, "transcript": "x"}
-    assert any("poort" in r for r in waarneming.oordeel(run, {})), waarneming.oordeel(run, {})
+           "branch": None, "worktree": None, "repo_pad": None, "transcript": "x"}
+    rood, _ = waarneming.oordeel(run, {})
+    assert any("poort" in r for r in rood), rood
 
 
-def test_een_verdwenen_test_is_rood():
-    hoofd = _git_repo(TMP / "regressie" / "hoofd", {
+def test_een_poort_die_draaide_en_afkeurde_is_rood():
+    """`--check` heeft gedraaid en het werk afgewezen: exit 1 is geen groen."""
+    run = {"geschreven": ["a.py"], "cleanup": ("completed", 1), "status": "completed",
+           "branch": None, "worktree": None, "repo_pad": None, "transcript": "x"}
+    rood, gemeten = waarneming.oordeel(run, {})
+    assert any("exit 1" in r for r in rood), rood
+    assert gemeten["poort"] is True, gemeten
+
+
+def test_een_run_die_nog_draait_is_grijs_niet_groen():
+    for status in ("running", None):
+        run = {"geschreven": ["a.py"], "cleanup": None, "status": status,
+               "branch": None, "worktree": None, "repo_pad": None, "transcript": "x"}
+        rood, gemeten = waarneming.oordeel(run, {})
+        assert not any("poort" in r for r in rood), (status, rood)
+        assert gemeten["poort"] is not True, (status, gemeten)
+
+
+def test_een_verdwenen_test_op_een_tak_zonder_worktree_is_rood():
+    """De worktree bestaat niet — vijf van de zes bestaan niet meer — de tak wel.
+
+    En de agent schreef prijs.py, geen enkel test_-bestand: regel 3 mag zich niet
+    beperken tot wat de agent aanraakte.
+    """
+    repo = _git_repo(TMP / "regressie" / "repo", {
+        "prijs.py": "prijs = 1\n",
         "test_prijs.py": "def test_geen_enkele_waarde_wordt_verzonnen():\n    pass\n"
                          "def test_iets_anders():\n    pass\n"})
-    tak = TMP / "regressie" / "tak"
-    tak.mkdir(parents=True, exist_ok=True)
-    (tak / "test_prijs.py").write_text("def test_iets_anders():\n    pass\n", encoding="utf-8")
-    run = {"geschreven": ["test_prijs.py"], "cleanup": ("completed", 0),
-           "status": "completed", "worktree": str(tak), "repo_pad": str(hoofd),
-           "transcript": "x"}
-    r = waarneming.oordeel(run, {"systemen": hoofd})
-    assert any("test_geen_enkele_waarde_wordt_verzonnen" in x for x in r), r
+    _git_tak(repo, "vk/0b6d-systeem-5", {
+        "prijs.py": "prijs = 2\n",
+        "test_prijs.py": "def test_iets_anders():\n    pass\n"})
+    run = {"geschreven": ["prijs.py"], "cleanup": ("completed", 0), "status": "completed",
+           "branch": "vk/0b6d-systeem-5", "worktree": "/bestaat/allang/niet/meer",
+           "repo_pad": str(repo), "transcript": "x"}
+    rood, gemeten = waarneming.oordeel(run, {"systemen": repo})
+    assert any("test_geen_enkele_waarde_wordt_verzonnen" in x for x in rood), rood
+    assert gemeten["testregressie"] is True, gemeten
+
+
+def test_een_nieuw_bestand_is_iets_anders_dan_git_die_niets_kon_zeggen():
+    """Nieuw bestand = bevinding. Onleesbaar = grijs. Samenvallen maakt stil groen."""
+    repo = _git_repo(TMP / "sentinel" / "repo", {"a.py": "x = 1\n"})
+    assert waarneming._lees(repo, "main", "a.py") == "x = 1\n"
+    assert waarneming._lees(repo, "main", "nieuw.py") is None
+    assert waarneming._lees(repo, "vk/bestaat-niet", "a.py") is waarneming.ONLEESBAAR
+    geen_repo = TMP / "sentinel" / "geen-git"
+    geen_repo.mkdir(parents=True, exist_ok=True)
+    assert waarneming._lees(geen_repo, "main", "a.py") is waarneming.ONLEESBAAR
+
+
+def test_een_tak_die_niet_meer_bestaat_is_grijs_niet_groen():
+    repo = _git_repo(TMP / "grijzetak" / "repo", {"a.py": "x = 1\n"})
+    run = {"geschreven": ["a.py"], "cleanup": ("completed", 0), "status": "completed",
+           "branch": "vk/weg", "worktree": None, "repo_pad": str(repo), "transcript": "x"}
+    rood, gemeten = waarneming.oordeel(run, {"systemen": repo})
+    assert rood == [], rood
+    assert gemeten["schreef"] == "tak vk/weg bestaat niet meer", gemeten
+    assert gemeten["testregressie"] == "tak vk/weg bestaat niet meer", gemeten
+
+
+def test_een_run_zonder_gekoppelde_repo_is_grijs_niet_groen():
+    run = {"geschreven": ["a.py"], "cleanup": ("completed", 0), "status": "completed",
+           "branch": "vk/x", "worktree": None, "repo_pad": None, "transcript": "x"}
+    rood, gemeten = waarneming.oordeel(run, {})
+    assert rood == [], rood
+    assert [v for v in gemeten.values() if v is not True], gemeten
 
 
 def test_de_repo_wordt_op_pad_gekoppeld_niet_op_naam():
@@ -257,14 +338,15 @@ def test_de_repo_wordt_op_pad_gekoppeld_niet_op_naam():
 
 
 def test_een_schone_run_is_groen():
-    hoofd = _git_repo(TMP / "schoon" / "hoofd", {"test_prijs.py": "def test_a():\n    pass\n"})
-    tak = TMP / "schoon" / "tak"
-    tak.mkdir(parents=True, exist_ok=True)
-    (tak / "test_prijs.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    repo = _git_repo(TMP / "schoon" / "repo", {"test_prijs.py": "def test_a():\n    pass\n"})
+    _git_tak(repo, "vk/schoon", {"test_prijs.py": "def test_a():\n    pass\n"
+                                                  "def test_b():\n    pass\n"})
     run = {"geschreven": ["test_prijs.py"], "cleanup": ("completed", 0),
-           "status": "completed", "worktree": str(tak), "repo_pad": str(hoofd),
-           "transcript": "x"}
-    assert waarneming.oordeel(run, {"systemen": hoofd}) == []
+           "status": "completed", "branch": "vk/schoon", "worktree": None,
+           "repo_pad": str(repo), "transcript": "x"}
+    rood, gemeten = waarneming.oordeel(run, {"systemen": repo})
+    assert rood == [], rood
+    assert gemeten == {"schreef": True, "poort": True, "testregressie": True}, gemeten
 
 
 def test_de_pagina_toont_de_rode_reden_woordelijk():
@@ -285,10 +367,35 @@ def test_de_pagina_meet_niet_zelf():
 
 
 def test_laag_zeven_staat_in_het_manifest():
-    m = json.loads((Path.home() / "durabo-platform/layers.json").read_text(encoding="utf-8"))
+    manifest = Path.home() / "durabo-platform/layers.json"
+    if not manifest.exists():
+        print("overgeslagen: ~/durabo-platform/layers.json staat niet op deze machine")
+        return
+    m = json.loads(manifest.read_text(encoding="utf-8"))
     laag = [l for l in m["lagen"] if l["nr"] == 7]
     assert laag, "laag 7 ontbreekt in layers.json"
     assert "waarneming.py" in json.dumps(laag[0]), laag[0]
+
+
+def test_een_ontbrekende_vk_database_is_geen_nul_runs():
+    """Ontbrekend gereedschap moet zeggen dat het niet kan meten, niet 'leeg'."""
+    assert waarneming.runs({}, vk_db=TMP / "bestaat-niet.sqlite") is None
+    h = controlroom.runs_html(None)
+    assert "niet gevonden" in h, h
+    assert "Geen runs in Vibe Kanban" not in h, h
+
+
+def test_de_pagina_toont_grijs_met_reden_als_een_regel_niet_draaide():
+    rijen = [{"workspace": "Systeem 5", "branch": "vk/s5", "status": "completed",
+              "exit_code": 0, "gestart": "2026-08-28T11:39:00Z", "duur_s": 60.0,
+              "beurten": 29, "tools": {}, "geschreven": ["prijs.py"],
+              "cleanup": ("completed", 0), "transcript": "/x", "rood": [],
+              "gemeten": {"schreef": True, "poort": True,
+                          "testregressie": "tak vk/s5 bestaat niet meer"}}]
+    h = controlroom.runs_html(rijen)
+    assert "kaart grijs" in h, h
+    assert "kaart groen" not in h, "een regel die niet draaide mag nooit groen worden"
+    assert "tak vk/s5 bestaat niet meer" in h, h
 
 
 def test_runs_html_ontsnapt_werkruimte_en_tak():

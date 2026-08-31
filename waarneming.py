@@ -101,14 +101,88 @@ def _testnamen(tekst):
     return set(TESTNAAM.findall(tekst))
 
 
-def _in_main(repo, bestand):
-    """De inhoud van een bestand op main, of None als git dat niet kan zeggen."""
+ONLEESBAAR = object()   # git kon niets zeggen — dat is grijs, niet "staat er niet"
+
+
+def _git(repo, *args):
+    """git in deze repo, of None als git zelf niet kon draaien."""
     try:
-        r = subprocess.run(["git", "show", f"main:{bestand}"], cwd=repo,
-                           capture_output=True, text=True, timeout=10)
+        return subprocess.run(("git",) + args, cwd=repo, capture_output=True,
+                              text=True, timeout=20)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return r.stdout if r.returncode == 0 else None
+
+
+def _refleesbaar(repo, ref):
+    """True als de ref bestaat, False als hij ontbreekt, None als git niet kon draaien."""
+    r = _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    return None if r is None else r.returncode == 0
+
+
+def _lees(repo, ref, bestand):
+    """De inhoud van een bestand op een ref.
+
+    None = het bestand staat daar niet. ONLEESBAAR = git kon het niet zeggen
+    (ontbrekende ref, ondiepe kloon, geen git). Die twee mogen nooit samenvallen:
+    het eerste is een bevinding, het tweede is grijs.
+    """
+    r = _git(repo, "show", f"{ref}:{bestand}")
+    if r is None:
+        return ONLEESBAAR
+    if r.returncode == 0:
+        return r.stdout
+    return None if _refleesbaar(repo, ref) is True else ONLEESBAAR
+
+
+def _gewijzigd(repo, bereik):
+    """Padnamen die dit diff-bereik raakt; None als git dat niet kan zeggen.
+
+    Renames worden niet gedetecteerd: een hernoemd testbestand telt liever één keer
+    te veel als verdwenen dan één keer te weinig.
+    """
+    r = _git(repo, "diff", "--name-only", "-z", "--no-renames", bereik)
+    if r is None or r.returncode != 0:
+        return None
+    return [p for p in r.stdout.split("\0") if p]
+
+
+def _verdwenen_tests(repo, tak):
+    """Elke test die op main staat en op de tak weg is; None als er niet te kijken viel.
+
+    Vergelijkt takken, geen worktrees: vijf van de zes VK-worktrees op deze machine
+    bestaan niet meer, de takken wel — en een regel die zwijgt omdat de map weg is,
+    maakt een run groen zonder gekeken te hebben.
+
+    Kijkt naar élk testbestand dat tussen main en de tak verschilt, niet alleen naar
+    wat de agent schreef: systeem 5, 6 en 7 schreven prijs.py, betaalrun_fixtures.py
+    en royalty.py en géén test_*.py, en lieten ondertussen elk één test vallen.
+    Een bestand dat op beide refs identiek is kan per definitie geen test missen.
+    """
+    verschil = _gewijzigd(repo, f"main..{tak}")
+    if verschil is None:
+        return None
+    weg = []
+    for bestand in verschil:
+        if not (Path(bestand).name.startswith("test_") and bestand.endswith(".py")):
+            continue
+        op_main = _lees(repo, "main", bestand)
+        if op_main is ONLEESBAAR:
+            return None
+        if op_main is None:
+            continue                          # nieuw op de tak: niets te verliezen
+        op_tak = _lees(repo, tak, bestand)
+        if op_tak is ONLEESBAAR:
+            return None
+        if op_tak is None:
+            # Het hele bestand ontbreekt op de tak. Dat is één bevinding, geen dertig
+            # regels: meestal is de tak ouder dan het bestand. Wél zichtbaar, want een
+            # tak die zo gemerged wordt neemt die tests mee het graf in.
+            weg.append(f"testbestand staat niet op de tak: {bestand} "
+                       f"({len(_testnamen(op_main))} tests op main)")
+            continue
+        for t in sorted(_testnamen(op_main) - _testnamen(op_tak)):
+            weg.append(f"test verdwenen t.o.v. main: {t} in {bestand}")
+    return weg
 
 
 def _hoofdrepo(run, repos):
@@ -128,29 +202,65 @@ def _hoofdrepo(run, repos):
     return None
 
 
-def oordeel(run, repos):
-    """Wat er mis is met deze run. Lege lijst = groen; onmeetbaar = geen oordeel."""
-    rood = []
-    if run["transcript"] and not run["geschreven"]:
-        rood.append("geen enkel bestand geschreven — de agent heeft niets opgeleverd")
-    if run["status"] in ("completed", "failed") and run["cleanup"] is None:
-        rood.append("de poort heeft nooit gedraaid — er is niets gecontroleerd")
+def _waarom(hoofd, tak, anders):
+    """Waarom een git-regel niet kon draaien — kort genoeg voor de kaart."""
+    if hoofd is None:
+        return "geen repo gekoppeld aan deze run"
+    if not tak:
+        return "de run heeft geen tak"
+    if _refleesbaar(hoofd, tak) is False:
+        return f"tak {tak} bestaat niet meer"
+    return anders
 
+
+def oordeel(run, repos):
+    """(rood, gemeten) — wat er mis is, en welke regels werkelijk gedraaid hebben.
+
+    Groen is verdiend: leeg `rood` én alle drie de regels gemeten. Een regel die niet
+    kon draaien staat in `gemeten` met de reden in plaats van True; dat is grijs.
+    Een meting die stilvalt mag nooit als groen eindigen.
+    """
+    rood, gemeten = [], {}
     hoofd = _hoofdrepo(run, repos)
-    tak = Path(run["worktree"]) if run["worktree"] else None
-    if hoofd and tak and tak.is_dir():
-        for naam in run["geschreven"]:
-            if not Path(naam).name.startswith("test_"):
-                continue
-            was = _in_main(hoofd, Path(naam).name)
-            if was is None:
-                continue                      # nieuw bestand of geen git: niets te vergelijken
-            nu = tak / Path(naam).name
-            weg = _testnamen(was) - _testnamen(nu.read_text(encoding="utf-8")
-                                               if nu.exists() else "")
-            for t in sorted(weg):
-                rood.append(f"test verdwenen t.o.v. main: {t} in {Path(naam).name}")
-    return rood
+    tak = run.get("branch")
+
+    # regel 1 — heeft deze run iets opgeleverd? De diff van de tak is de grond, niet
+    # het aantal Writes: een agent die met `cat > bestand <<EOF` schrijft laat geen
+    # Write in zijn transcript achter, maar wel een diff.
+    # ponytail: een tak zonder eigen commits en een tak die al in main zit zien er
+    # in `main...tak` hetzelfde uit; hier heeft geen enkele VK-tak eigen commits.
+    opgeleverd = _gewijzigd(hoofd, f"main...{tak}") if hoofd and tak else None
+    if opgeleverd is None:
+        gemeten["schreef"] = _waarom(hoofd, tak, "de tak is niet met main te vergelijken")
+    else:
+        gemeten["schreef"] = True
+        if not opgeleverd:
+            rood.append("geen enkel bestand geschreven — de agent heeft niets opgeleverd")
+
+    # regel 2 — de poort: nooit gedraaid is rood, gedraaid en afgekeurd óók.
+    if run["status"] is None:
+        gemeten["poort"] = "geen codingagent-regel in Vibe Kanban"
+    elif run["status"] == "running":
+        gemeten["poort"] = "de run draait nog"
+    else:
+        gemeten["poort"] = True
+        if run["cleanup"] is None:
+            rood.append("de poort heeft nooit gedraaid — er is niets gecontroleerd")
+        else:
+            p_status, p_exit = run["cleanup"]
+            if p_exit not in (0, None):
+                rood.append(f"de poort draaide en keurde af — exit {p_exit}")
+            elif p_status != "completed":
+                rood.append(f"de poort is niet afgerond — status {p_status}")
+
+    # regel 3 — testregressie
+    verdwenen = _verdwenen_tests(hoofd, tak) if hoofd and tak else None
+    if verdwenen is None:
+        gemeten["testregressie"] = _waarom(hoofd, tak, "git kon main en de tak niet lezen")
+    else:
+        gemeten["testregressie"] = True
+        rood += verdwenen
+    return rood, gemeten
 
 
 VK_DB = Path.home() / "Library/Application Support/ai.bloop.vibe-kanban/db.v2.sqlite"
@@ -168,9 +278,13 @@ order by p.started_at
 
 
 def runs(m, vk_db=VK_DB, projects=PROJECTS):
-    """Eén rij per VK-workspace: de agentrun, de poort, en wat het transcript zegt."""
+    """Eén rij per VK-workspace: de agentrun, de poort, en wat het transcript zegt.
+
+    None (niet []) als de Vibe Kanban-database er niet is: geen database betekent
+    "niet te meten", en dat is iets anders dan "geen runs".
+    """
     if not Path(vk_db).exists():
-        return []
+        return None
     con = sqlite3.connect(f"file:{vk_db}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     rijen = con.execute(VRAAG).fetchall()
@@ -203,5 +317,5 @@ def runs(m, vk_db=VK_DB, projects=PROJECTS):
         w["transcript"] = str(transcript_dir)
         w.update(_aggregeer_sessies(sessies))
     for w in uit.values():
-        w["rood"] = oordeel(w, m.get("repos", {}))
+        w["rood"], w["gemeten"] = oordeel(w, m.get("repos", {}))
     return sorted(uit.values(), key=lambda w: w["gestart"] or "")

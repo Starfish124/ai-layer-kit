@@ -40,6 +40,7 @@ LAMP_KLEUR = {
     "getest": ("var(--teal)", "var(--teal-tint)"),
     "gebouwd, ongetest": ("var(--warn)", "var(--warn-tint)"),
     "niet gebouwd": ("var(--faint)", "var(--paper)"),
+    "grijs": ("var(--mute)", "#f1f2f4"),
 }
 
 
@@ -293,6 +294,9 @@ RUNS_PAGE = """<!doctype html>
   summary {{ cursor:pointer; }}
   .meta, .mute {{ color:var(--mute); font-size:.88em; }}
   ul.rood {{ color:var(--danger); margin:.4rem 0 0 1rem; padding:0; }}
+  ul.grijs {{ color:var(--mute); margin:.4rem 0 0 1rem; padding:0; }}
+  .pil {{ display:inline-block; border:1px solid; border-radius:999px;
+         padding:.05rem .5rem; font-size:.85em; }}
 </style>
 </head>
 <body>
@@ -307,11 +311,18 @@ def runs_html(rijen):
     """Eén regel per agentrun: wat hij deed, en waarom hij rood is."""
     kop = ("<h1>Runs</h1><p class=meta>Wat elke agentrun deed — "
            "gemeten aan zijn transcript, niet aan zijn exitgetal.</p>")
+    if rijen is None:
+        return RUNS_PAGE.format(inhoud=kop + "<p>" + _pil(
+            "Vibe Kanban-database niet gevonden — hier valt niets te meten", "grijs")
+            + "</p>")
     if not rijen:
         return RUNS_PAGE.format(inhoud=kop + "<p>Geen runs in Vibe Kanban.</p>")
     blokken = []
     for r in rijen:
-        lamp = "rood" if r["rood"] else ("grijs" if r["beurten"] is None else "groen")
+        gemeten = r.get("gemeten")
+        ongemeten = ([f"{k}: {v}" for k, v in gemeten.items() if v is not True]
+                     if gemeten else ["er is geen meetverslag voor deze run"])
+        lamp = "rood" if r["rood"] else ("groen" if not ongemeten else "grijs")
         tools = ", ".join(f"{esc(k)} {v}" for k, v in sorted(r["tools"].items())) or "—"
         duur = f"{r['duur_s'] / 60:.1f} min" if r.get("duur_s") else "—"
         redenen = "".join(f"<li>{esc(x)}</li>" for x in r["rood"])
@@ -327,6 +338,9 @@ def runs_html(rijen):
             f"<p>geschreven: {esc(', '.join(r['geschreven'])) or 'niets'}</p>"
             f"<p>poort: {esc(str(r['cleanup'])) if r['cleanup'] else 'niet gedraaid'}</p>"
             + (f"<ul class=rood>{redenen}</ul>" if redenen else "")
+            + (("<ul class=grijs>" + "".join(f"<li>niet gemeten — {esc(x)}</li>"
+                                             for x in ongemeten) + "</ul>")
+               if ongemeten else "")
             + "</details>")
     return RUNS_PAGE.format(inhoud=kop + "".join(blokken))
 
