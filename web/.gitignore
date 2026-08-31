@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ADR-007: de gebouwde canvas hoort WEL in git — "gebouwde dist in git zodat de Python-server
+# geen Node nodig heeft". De regel `dist` hierboven kwam met het Vite-sjabloon mee en sprak die
+# beslissing stil tegen: 0 bestanden getrackt, dus elke verse clone had een dode /flow.
+!dist
