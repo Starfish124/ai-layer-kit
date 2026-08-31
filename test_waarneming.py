@@ -254,6 +254,52 @@ def test_een_agent_die_met_een_heredoc_schrijft_is_niet_rood():
     assert gemeten == {"schreef": True, "poort": True, "testregressie": True}, gemeten
 
 
+def test_een_gemergede_tak_met_writes_in_het_transcript_is_groen():
+    """De tak zit in main, dus `main...tak` is leeg — dat is geslaagd werk, geen niets.
+
+    Systeem 3, 4 en 8 zijn precies dit geval: hun tak is een voorouder van main.
+    """
+    repo = _git_repo(TMP / "gemerged" / "repo", {"a.py": "x = 1\n"})
+    subprocess.run(["git", "branch", "vk/gemerged"], cwd=repo, check=True)
+    (repo / "b.py").write_text("y = 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "main loopt door"], cwd=repo, check=True)
+    assert waarneming._gewijzigd(repo, "main...vk/gemerged") == [], "de tak zit in main"
+    run = {"geschreven": ["a.py", "b.py"], "cleanup": ("completed", 0), "status": "completed",
+           "branch": "vk/gemerged", "worktree": None, "repo_pad": str(repo),
+           "transcript": "/x/s.jsonl"}
+    rood, gemeten = waarneming.oordeel(run, {"systemen": repo})
+    assert rood == [], rood
+    assert gemeten == {"schreef": True, "poort": True, "testregressie": True}, gemeten
+
+
+def test_een_testbestand_dat_de_tak_nooit_zag_is_geen_regressie():
+    """main is doorgelopen: test_nieuw.py is er later bijgekomen. Niemand deed iets fout.
+
+    Een test die uit een bestand verdwijnt dat beide refs kennen, is dat wél.
+    """
+    repo = _git_repo(TMP / "jongertak" / "repo", {
+        "test_gedeeld.py": "def test_blijft():\n    pass\ndef test_valt_weg():\n    pass\n"})
+    _git_tak(repo, "vk/oud", {"test_gedeeld.py": "def test_blijft():\n    pass\n"})
+    (repo / "test_nieuw.py").write_text("def test_later_toegevoegd():\n    pass\n",
+                                        encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "main krijgt er een test bij"], cwd=repo, check=True)
+    weg = waarneming._verdwenen_tests(repo, "vk/oud")
+    assert weg == ["test verdwenen t.o.v. main: test_valt_weg in test_gedeeld.py"], weg
+
+
+def test_een_tak_die_een_testbestand_weggooit_is_wel_rood():
+    repo = _git_repo(TMP / "weggegooid" / "repo", {
+        "test_prijs.py": "def test_a():\n    pass\ndef test_b():\n    pass\n"})
+    subprocess.run(["git", "checkout", "-q", "-b", "vk/sloop"], cwd=repo, check=True)
+    subprocess.run(["git", "rm", "-q", "test_prijs.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "weg ermee"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
+    weg = waarneming._verdwenen_tests(repo, "vk/sloop")
+    assert weg == ["testbestand verwijderd op de tak: test_prijs.py (2 tests bij het aftakken)"], weg
+
+
 def test_een_poort_die_nooit_draaide_is_rood():
     run = {"geschreven": ["a.py"], "cleanup": None, "status": "completed",
            "branch": None, "worktree": None, "repo_pad": None, "transcript": "x"}
@@ -317,7 +363,6 @@ def test_een_tak_die_niet_meer_bestaat_is_grijs_niet_groen():
            "branch": "vk/weg", "worktree": None, "repo_pad": str(repo), "transcript": "x"}
     rood, gemeten = waarneming.oordeel(run, {"systemen": repo})
     assert rood == [], rood
-    assert gemeten["schreef"] == "tak vk/weg bestaat niet meer", gemeten
     assert gemeten["testregressie"] == "tak vk/weg bestaat niet meer", gemeten
 
 

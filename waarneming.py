@@ -146,12 +146,22 @@ def _gewijzigd(repo, bereik):
     return [p for p in r.stdout.split("\0") if p]
 
 
+def _splitspunt(repo, tak):
+    """De commit waar de tak van main aftakte, of None als git dat niet kan zeggen."""
+    r = _git(repo, "merge-base", "main", tak)
+    return r.stdout.strip() if r is not None and r.returncode == 0 else None
+
+
 def _verdwenen_tests(repo, tak):
     """Elke test die op main staat en op de tak weg is; None als er niet te kijken viel.
 
     Vergelijkt takken, geen worktrees: vijf van de zes VK-worktrees op deze machine
     bestaan niet meer, de takken wel — en een regel die zwijgt omdat de map weg is,
     maakt een run groen zonder gekeken te hebben.
+
+    Een testbestand dat op main staat en op de tak niet, is meestal geen regressie:
+    de tak is ouder dan het bestand. Alleen als het bestand al bij het aftakken
+    bestond, heeft de tak het echt weggegooid.
 
     Kijkt naar élk testbestand dat tussen main en de tak verschilt, niet alleen naar
     wat de agent schreef: systeem 5, 6 en 7 schreven prijs.py, betaalrun_fixtures.py
@@ -174,11 +184,18 @@ def _verdwenen_tests(repo, tak):
         if op_tak is ONLEESBAAR:
             return None
         if op_tak is None:
-            # Het hele bestand ontbreekt op de tak. Dat is één bevinding, geen dertig
-            # regels: meestal is de tak ouder dan het bestand. Wél zichtbaar, want een
-            # tak die zo gemerged wordt neemt die tests mee het graf in.
-            weg.append(f"testbestand staat niet op de tak: {bestand} "
-                       f"({len(_testnamen(op_main))} tests op main)")
+            # Het bestand ontbreekt op de tak. Twee heel verschillende dingen: main is
+            # doorgelopen sinds de tak werd afgetakt (niemand deed iets fout), of de
+            # tak heeft het bestand weggegooid. Het splitspunt weet welke van de twee.
+            basis = _splitspunt(repo, tak)
+            if basis is None:
+                return None
+            op_basis = _lees(repo, basis, bestand)
+            if op_basis is ONLEESBAAR:
+                return None
+            if op_basis is not None:
+                weg.append(f"testbestand verwijderd op de tak: {bestand} "
+                           f"({len(_testnamen(op_basis))} tests bij het aftakken)")
             continue
         for t in sorted(_testnamen(op_main) - _testnamen(op_tak)):
             weg.append(f"test verdwenen t.o.v. main: {t} in {bestand}")
@@ -224,18 +241,23 @@ def oordeel(run, repos):
     hoofd = _hoofdrepo(run, repos)
     tak = run.get("branch")
 
-    # regel 1 — heeft deze run iets opgeleverd? De diff van de tak is de grond, niet
-    # het aantal Writes: een agent die met `cat > bestand <<EOF` schrijft laat geen
-    # Write in zijn transcript achter, maar wel een diff.
-    # ponytail: een tak zonder eigen commits en een tak die al in main zit zien er
-    # in `main...tak` hetzelfde uit; hier heeft geen enkele VK-tak eigen commits.
-    opgeleverd = _gewijzigd(hoofd, f"main...{tak}") if hoofd and tak else None
-    if opgeleverd is None:
-        gemeten["schreef"] = _waarom(hoofd, tak, "de tak is niet met main te vergelijken")
+    # regel 1 — heeft deze run iets opgeleverd? Twee bronnen, want beide hebben een
+    # blinde vlek: het transcript mist wat met `cat > bestand <<EOF` geschreven is, en
+    # de diff van een tak die al in main zit is leeg terwijl het werk juist gelukt is.
+    # Rood alleen als ze het er allebei over eens zijn dat er niets is.
+    diff = _gewijzigd(hoofd, f"main...{tak}") if hoofd and tak else None
+    uit_transcript = list(run.get("geschreven") or []) if run.get("transcript") else None
+    if diff or uit_transcript:
+        gemeten["schreef"] = True                     # één bron met werk is genoeg
+    elif diff is None and uit_transcript is None:
+        gemeten["schreef"] = _waarom(hoofd, tak, "geen transcript en geen tak om te lezen")
+    elif diff is None or uit_transcript is None:
+        gemeten["schreef"] = ("het transcript zag niets en de tak is niet te lezen"
+                              if diff is None else
+                              "de tak is leeg en er is geen transcript om na te kijken")
     else:
         gemeten["schreef"] = True
-        if not opgeleverd:
-            rood.append("geen enkel bestand geschreven — de agent heeft niets opgeleverd")
+        rood.append("geen enkel bestand geschreven — de agent heeft niets opgeleverd")
 
     # regel 2 — de poort: nooit gedraaid is rood, gedraaid en afgekeurd óók.
     if run["status"] is None:
