@@ -12,10 +12,12 @@ Meet, bewaart niets. Elke weergave is een verse meting.
 import json
 import re
 import sqlite3
+import subprocess
 from pathlib import Path
 
 PROJECTS = Path.home() / ".claude/projects"
 SCHRIJFTOOLS = ("Write", "Edit", "NotebookEdit")
+TESTNAAM = re.compile(r"^def (test_\w+)", re.M)
 
 
 def transcriptmap(worktree, projects=PROJECTS):
@@ -95,6 +97,62 @@ def _aggregeer_sessies(paden):
             "duur_s": duur}
 
 
+def _testnamen(tekst):
+    return set(TESTNAAM.findall(tekst))
+
+
+def _in_main(repo, bestand):
+    """De inhoud van een bestand op main, of None als git dat niet kan zeggen."""
+    try:
+        r = subprocess.run(["git", "show", f"main:{bestand}"], cwd=repo,
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _hoofdrepo(run, repos):
+    """De hoofdrepo bij deze run, gekoppeld op pad.
+
+    Op naam koppelen gaat stuk: Vibe Kanban noemt de repo `stride-durabo`, layers.json
+    noemt hem `systemen`. Dan vindt `repos.get(...)` niets en zwijgt regel 3 voorgoed —
+    groen omdat er niet gekeken is.
+    """
+    if not run.get("repo_pad"):
+        return None
+    p = Path(run["repo_pad"]).expanduser().resolve()
+    for pad in repos.values():
+        q = Path(pad).expanduser()
+        if q.resolve() == p:
+            return q
+    return None
+
+
+def oordeel(run, repos):
+    """Wat er mis is met deze run. Lege lijst = groen; onmeetbaar = geen oordeel."""
+    rood = []
+    if run["transcript"] and not run["geschreven"]:
+        rood.append("geen enkel bestand geschreven — de agent heeft niets opgeleverd")
+    if run["status"] in ("completed", "failed") and run["cleanup"] is None:
+        rood.append("de poort heeft nooit gedraaid — er is niets gecontroleerd")
+
+    hoofd = _hoofdrepo(run, repos)
+    tak = Path(run["worktree"]) if run["worktree"] else None
+    if hoofd and tak and tak.is_dir():
+        for naam in run["geschreven"]:
+            if not Path(naam).name.startswith("test_"):
+                continue
+            was = _in_main(hoofd, Path(naam).name)
+            if was is None:
+                continue                      # nieuw bestand of geen git: niets te vergelijken
+            nu = tak / Path(naam).name
+            weg = _testnamen(was) - _testnamen(nu.read_text(encoding="utf-8")
+                                               if nu.exists() else "")
+            for t in sorted(weg):
+                rood.append(f"test verdwenen t.o.v. main: {t} in {Path(naam).name}")
+    return rood
+
+
 VK_DB = Path.home() / "Library/Application Support/ai.bloop.vibe-kanban/db.v2.sqlite"
 
 VRAAG = """
@@ -144,4 +202,6 @@ def runs(m, vk_db=VK_DB, projects=PROJECTS):
         # Aggregeer ALLE sessies in het worktree
         w["transcript"] = str(transcript_dir)
         w.update(_aggregeer_sessies(sessies))
+    for w in uit.values():
+        w["rood"] = oordeel(w, m.get("repos", {}))
     return sorted(uit.values(), key=lambda w: w["gestart"] or "")

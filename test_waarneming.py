@@ -5,6 +5,7 @@
 
 import json
 import sqlite3
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -205,6 +206,64 @@ def test_null_agent_working_dir_geeft_geen_exception():
     assert r[0]["transcript"] is None, r[0]
     assert r[0]["beurten"] is None, r[0]
     assert r[0]["sessies"] == 0, f"Verwacht sessies=0, kreeg {r[0]['sessies']}"
+
+
+def _git_repo(pad, bestanden):
+    pad.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=pad, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=pad, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=pad, check=True)
+    for naam, inhoud in bestanden.items():
+        (pad / naam).write_text(inhoud, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=pad, check=True)
+    subprocess.run(["git", "commit", "-qm", "start"], cwd=pad, check=True)
+    return pad
+
+
+def test_nul_geschreven_bestanden_is_rood():
+    run = {"geschreven": [], "cleanup": ("completed", 0), "status": "completed",
+           "worktree": None, "repo_pad": None, "transcript": "x"}
+    assert any("geen enkel bestand" in r for r in waarneming.oordeel(run, {})), \
+        waarneming.oordeel(run, {})
+
+
+def test_een_poort_die_nooit_draaide_is_rood():
+    run = {"geschreven": ["a.py"], "cleanup": None, "status": "completed",
+           "worktree": None, "repo_pad": None, "transcript": "x"}
+    assert any("poort" in r for r in waarneming.oordeel(run, {})), waarneming.oordeel(run, {})
+
+
+def test_een_verdwenen_test_is_rood():
+    hoofd = _git_repo(TMP / "regressie" / "hoofd", {
+        "test_prijs.py": "def test_geen_enkele_waarde_wordt_verzonnen():\n    pass\n"
+                         "def test_iets_anders():\n    pass\n"})
+    tak = TMP / "regressie" / "tak"
+    tak.mkdir(parents=True, exist_ok=True)
+    (tak / "test_prijs.py").write_text("def test_iets_anders():\n    pass\n", encoding="utf-8")
+    run = {"geschreven": ["test_prijs.py"], "cleanup": ("completed", 0),
+           "status": "completed", "worktree": str(tak), "repo_pad": str(hoofd),
+           "transcript": "x"}
+    r = waarneming.oordeel(run, {"systemen": hoofd})
+    assert any("test_geen_enkele_waarde_wordt_verzonnen" in x for x in r), r
+
+
+def test_de_repo_wordt_op_pad_gekoppeld_niet_op_naam():
+    """VK noemt hem stride-durabo, layers.json noemt hem systemen — pad is de koppeling."""
+    hoofd = _git_repo(TMP / "koppel" / "hoofd", {"test_a.py": "def test_a():\n    pass\n"})
+    run = {"repo_pad": str(hoofd), "repo": "stride-durabo"}
+    assert waarneming._hoofdrepo(run, {"systemen": hoofd}) is not None
+    assert waarneming._hoofdrepo({"repo_pad": "/bestaat/niet"}, {"systemen": hoofd}) is None
+
+
+def test_een_schone_run_is_groen():
+    hoofd = _git_repo(TMP / "schoon" / "hoofd", {"test_prijs.py": "def test_a():\n    pass\n"})
+    tak = TMP / "schoon" / "tak"
+    tak.mkdir(parents=True, exist_ok=True)
+    (tak / "test_prijs.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    run = {"geschreven": ["test_prijs.py"], "cleanup": ("completed", 0),
+           "status": "completed", "worktree": str(tak), "repo_pad": str(hoofd),
+           "transcript": "x"}
+    assert waarneming.oordeel(run, {"systemen": hoofd}) == []
 
 
 if __name__ == "__main__":
