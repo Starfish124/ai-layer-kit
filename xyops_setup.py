@@ -19,6 +19,31 @@ from pathlib import Path
 
 CFG = Path.home() / ".config/ai-layer-kit/xyops.json"
 KIT = Path(__file__).resolve().parent
+
+
+def _canonieke_checkout():
+    """Weiger te draaien vanuit een gekoppelde worktree.
+
+    Elke job hieronder bakt KIT in zijn `cd` — dus draaien vanuit een worktree herschrijft
+    *alle* productiejobs naar dat tijdelijke pad, stil, ook de jobs die niets met je werk te
+    maken hebben. Dat is één keer echt gebeurd (31 aug 2026) en was pas zichtbaar door de
+    scripts terug te lezen met get_events.
+
+    In een gekoppelde worktree wijst --git-dir naar .git/worktrees/<naam> en --git-common-dir
+    naar de echte .git; in de hoofdcheckout zijn ze gelijk.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(["git", "rev-parse", "--git-dir", "--git-common-dir"],
+                           cwd=KIT, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return                      # geen git = geen oordeel; niet tegenhouden
+    if r.returncode != 0:
+        return
+    regels = r.stdout.split()
+    if len(regels) == 2 and Path(regels[0]).resolve() != Path(regels[1]).resolve():
+        sys.exit(f"xyops_setup.py draait vanuit een worktree ({KIT}).\n"
+                 f"Elke job zou zijn cd naar dat pad krijgen. Draai hem uit de hoofdcheckout.")
 MANIFEST = Path.home() / "durabo-platform/layers.json"
 PY = "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
 
@@ -305,6 +330,7 @@ def trend_workflow(cfg, er_al):
 
 
 def main():
+    _canonieke_checkout()
     if not CFG.exists():
         sys.exit(f"geen {CFG} — maak eerst een API-sleutel aan in xyOps")
     cfg = json.loads(CFG.read_text())
