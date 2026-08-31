@@ -67,6 +67,42 @@ def _duur(tijden):
     return (stempels[-1] - stempels[0]).total_seconds()
 
 
+def _aggregeer_sessies(paden):
+    """Aggregeer alle transcripts in een worktree: sum beurten, merge tools, union geschreven.
+
+    Berekent duur_s over ALLE sessions (eerste tot laatste timestamp across all files).
+    """
+    if not paden:
+        return {"beurten": None, "tools": {}, "geschreven": [], "duur_s": None}
+
+    beurten_totaal = 0
+    tools_totaal = {}
+    geschreven_totaal = []
+    alle_tijden = []
+
+    for pad in paden:
+        t = leest_transcript(pad)
+        beurten_totaal += t["beurten"]
+        for tool, count in t["tools"].items():
+            tools_totaal[tool] = tools_totaal.get(tool, 0) + count
+        for bestand in t["geschreven"]:
+            if bestand not in geschreven_totaal:
+                geschreven_totaal.append(bestand)
+        # Verzamel alle timestamps voor cross-session duur
+        with Path(pad).open(encoding="utf-8") as f:
+            for regel in f:
+                try:
+                    d = json.loads(regel)
+                    if d.get("timestamp"):
+                        alle_tijden.append(d["timestamp"])
+                except ValueError:
+                    continue
+
+    duur = _duur(alle_tijden)
+    return {"beurten": beurten_totaal, "tools": tools_totaal, "geschreven": geschreven_totaal,
+            "duur_s": duur}
+
+
 VK_DB = Path.home() / "Library/Application Support/ai.bloop.vibe-kanban/db.v2.sqlite"
 
 VRAAG = """
@@ -105,14 +141,15 @@ def runs(m, vk_db=VK_DB, projects=PROJECTS):
             w["cleanup"] = (r["status"], r["exit_code"])
 
     for w in uit.values():
-        w.update(transcript=None, beurten=None, tools={}, geschreven=[], duur_s=None)
+        w.update(transcript=None, beurten=None, tools={}, geschreven=[], duur_s=None, sessies=0)
         if not w["worktree"]:
             continue
-        sessies = sorted(transcriptmap(Path(w["worktree"]), projects).glob("*.jsonl")) \
-            if transcriptmap(Path(w["worktree"]), projects).is_dir() else []
+        transcript_dir = transcriptmap(Path(w["worktree"]), projects)
+        sessies = sorted(transcript_dir.glob("*.jsonl")) if transcript_dir.is_dir() else []
+        w["sessies"] = len(sessies)
         if not sessies:
             continue
-        # Meerdere sessies in één worktree: de laatste is de run die telt.
-        w["transcript"] = str(sessies[-1])
-        w.update(leest_transcript(sessies[-1]))
+        # Aggregeer ALLE sessies in het worktree
+        w["transcript"] = str(transcript_dir)
+        w.update(_aggregeer_sessies(sessies))
     return sorted(uit.values(), key=lambda w: w["gestart"] or "")

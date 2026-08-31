@@ -136,6 +136,44 @@ def test_zonder_transcript_is_de_run_onbekend_geen_fout():
     assert r[0]["beurten"] is None, r[0]
 
 
+def test_meerdere_sessies_worden_gea_gregeerd_niet_willekeurig_gek_ozen():
+    # Test dat aggregeert TWO sessions, met UUIDs die alfabetisch tegengesteld sorteren
+    # aan hun chronologische volgorde. De oude code zou willekeurig een kiezen.
+    hier = TMP / "vk3"
+    hier.mkdir(parents=True, exist_ok=True)
+    container = hier / "worktrees"
+    worktree = container / "systemen"
+    worktree.mkdir(parents=True)
+    projects = hier / "projects"
+
+    # Maak twee sessions met UUIDs die tegengesteld sorteren
+    # UUID "zzz..." sorteert LATER dan "aaa..." maar we willen het EERSTE chronologisch
+    transcript_dir = waarneming.transcriptmap(worktree, projects)
+    _transcript(transcript_dir / "zzz-eerste-sessie.jsonl", [
+        _beurt("2026-08-28T11:39:00.000Z", [_tool("Write", file_path="bestand1.py")]),
+        _beurt("2026-08-28T11:40:00.000Z", [_tool("Write", file_path="bestand2.py")]),
+    ])
+    _transcript(transcript_dir / "aaa-tweede-sessie.jsonl", [
+        _beurt("2026-08-28T11:41:00.000Z", [_tool("Read", file_path="a.py")]),
+        _beurt("2026-08-28T11:42:00.000Z", [_tool("Bash", command="ls")]),
+    ])
+    _vk_db(hier / "db.sqlite", container)
+
+    r = waarneming.runs({"repos": {"systemen": Path("/repo")}},
+                        vk_db=hier / "db.sqlite", projects=projects)
+    assert len(r) == 1, r
+    # Beide sessions moeten gea_gregeerd zijn
+    assert r[0]["beurten"] == 4, f"Verwacht 4 beurten (2+2), kreeg {r[0]['beurten']}"
+    assert r[0]["sessies"] == 2, f"Verwacht 2 sessies, kreeg {r[0]['sessies']}"
+    # Geschreven bestanden uit beide sessions
+    assert set(r[0]["geschreven"]) == {"bestand1.py", "bestand2.py"}, \
+        f"Verwacht beide bestanden, kreeg {r[0]['geschreven']}"
+    # Tools uit beide sessions
+    assert r[0]["tools"]["Write"] == 2, f"Verwacht 2 Writes, kreeg {r[0]['tools']}"
+    assert r[0]["tools"]["Read"] == 1
+    assert r[0]["tools"]["Bash"] == 1
+
+
 if __name__ == "__main__":
     for naam, fn in sorted(globals().items()):
         if naam.startswith("test_"):
