@@ -579,33 +579,76 @@ Expected: `AttributeError: module 'controlroom' has no attribute 'runs_html'`
 
 - [ ] **Step 3: Schrijf de implementatie**
 
-Voeg `import waarneming` toe bij de imports van `controlroom.py` en deze functie ernaast (gebruik de bestaande `PAGE`/CSS-variabelen van het bestand — niet een eigen stijl verzinnen):
+Voeg `import waarneming` toe bij de imports van `controlroom.py`.
+
+**Let op — `PAGE` is niet herbruikbaar.** Die template heeft 21 verplichte placeholders
+(`{project}`, `{lagen}`, `{systemen}`, `{tests}`, `{audits}`, `{gemeten_op}`, …) en is de
+hoofdpagina. `PAGE.format(titel=…, inhoud=…)` gooit `KeyError`. `/runs` krijgt dus zijn eigen,
+kleine template. De accolades in de CSS moeten verdubbeld (`{{`/`}}`), net als in `PAGE`.
+
+Zet naast `PAGE`:
 
 ```python
+RUNS_PAGE = """<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runs — controlekamer</title>
+<style>
+  :root {{ --teal:#009b8f; --danger:#cf3f3a; --good:#1d7d43; --mute:#6b7280;
+          --lijn:#e5e7eb; --grond:#fbfbfa; }}
+  body {{ font:15px/1.5 -apple-system,system-ui,sans-serif; background:var(--grond);
+         color:#111; margin:0; padding:2rem; max-width:60rem; }}
+  a {{ color:var(--teal); }}
+  .kaart {{ border:1px solid var(--lijn); border-left:4px solid var(--mute);
+           border-radius:6px; background:#fff; padding:.6rem .9rem; margin:.5rem 0; }}
+  .kaart.rood {{ border-left-color:var(--danger); }}
+  .kaart.groen {{ border-left-color:var(--good); }}
+  .kaart.grijs {{ border-left-color:var(--mute); }}
+  summary {{ cursor:pointer; }}
+  .meta, .mute {{ color:var(--mute); font-size:.88em; }}
+  ul.rood {{ color:var(--danger); margin:.4rem 0 0 1rem; padding:0; }}
+</style>
+</head>
+<body>
+<p class=meta><a href="/">← controlekamer</a> · <a href="/flow">stroom</a></p>
+{inhoud}
+</body>
+</html>
+"""
+
+
 def runs_html(rijen):
     """Eén regel per agentrun: wat hij deed, en waarom hij rood is."""
-    kop = "<h1>Runs</h1><p class=meta>Wat elke agentrun deed — gemeten aan zijn transcript.</p>"
+    kop = ("<h1>Runs</h1><p class=meta>Wat elke agentrun deed — "
+           "gemeten aan zijn transcript, niet aan zijn exitgetal.</p>")
     if not rijen:
-        return PAGE.format(titel="Runs", inhoud=kop + "<p>Geen runs in Vibe Kanban.</p>")
+        return RUNS_PAGE.format(inhoud=kop + "<p>Geen runs in Vibe Kanban.</p>")
     blokken = []
     for r in rijen:
         lamp = "rood" if r["rood"] else ("grijs" if r["beurten"] is None else "groen")
-        tools = ", ".join(f"{k} {v}" for k, v in sorted(r["tools"].items())) or "—"
+        tools = ", ".join(f"{esc(k)} {v}" for k, v in sorted(r["tools"].items())) or "—"
         duur = f"{r['duur_s'] / 60:.1f} min" if r.get("duur_s") else "—"
-        redenen = "".join(f"<li>{re_}</li>" for re_ in r["rood"])
+        redenen = "".join(f"<li>{esc(x)}</li>" for x in r["rood"])
         blokken.append(
             f"<details class='kaart {lamp}'><summary>"
-            f"<b>{r['workspace']}</b> · {r['status'] or '—'} exit {r['exit_code']} · "
+            f"<b>{esc(r['workspace'])}</b> · {esc(r['status'] or '—')} "
+            f"exit {r['exit_code']} · "
             f"{r['beurten'] if r['beurten'] is not None else '?'} beurten · "
             f"{len(r['geschreven'])} bestanden</summary>"
-            f"<p class=meta>tak {r['branch']} · gestart {r['gestart'] or '—'} · {duur}</p>"
+            f"<p class=meta>tak {esc(r['branch'] or '—')} · "
+            f"gestart {esc(r['gestart'] or '—')} · {duur}</p>"
             f"<p>tools: {tools}</p>"
-            f"<p>geschreven: {', '.join(r['geschreven']) or 'niets'}</p>"
-            f"<p>poort: {r['cleanup'] or 'niet gedraaid'}</p>"
+            f"<p>geschreven: {esc(', '.join(r['geschreven'])) or 'niets'}</p>"
+            f"<p>poort: {esc(str(r['cleanup'])) if r['cleanup'] else 'niet gedraaid'}</p>"
             + (f"<ul class=rood>{redenen}</ul>" if redenen else "")
             + "</details>")
-    return PAGE.format(titel="Runs", inhoud=kop + "".join(blokken))
+    return RUNS_PAGE.format(inhoud=kop + "".join(blokken))
 ```
+
+`esc` bestaat al in `controlroom.py` en wordt overal gebruikt; gebruik hem hier ook —
+een branchnaam komt van buiten.
 
 Voeg in het CLI-blok (bij de andere `elif`-takken rond regel 533) toe:
 
@@ -614,7 +657,14 @@ Voeg in het CLI-blok (bij de andere `elif`-takken rond regel 533) toe:
         print(runs_html(waarneming.runs(meet.laad(manifest, ov))))
 ```
 
-En in de HTTP-handler, naast de bestaande `/flow`-route, dezelfde vorm voor `/runs` die `runs_html(waarneming.runs(...))` teruggeeft.
+En in `do_GET` (rond regel 471), **na** de `elif u.path == "/flow.json":`-tak en **vóór**
+`elif u.path in ("/", "/meet.json"):`, precies dezelfde vorm als de buren:
+
+```python
+            elif u.path == "/runs":
+                body = runs_html(waarneming.runs(meet.laad(manifest_pad, overrides))).encode()
+                ctype = "text/html; charset=utf-8"
+```
 
 - [ ] **Step 4: Draai de test tot hij slaagt**
 
