@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import controlroom
 import waarneming
 
 TMP = Path(tempfile.mkdtemp(prefix="ai-layer-kit-waarneming-"))
@@ -264,6 +265,23 @@ def test_een_schone_run_is_groen():
            "status": "completed", "worktree": str(tak), "repo_pad": str(hoofd),
            "transcript": "x"}
     assert waarneming.oordeel(run, {"systemen": hoofd}) == []
+
+
+def test_de_pagina_toont_de_rode_reden_woordelijk():
+    rijen = [{"workspace": "Systeem 5", "branch": "vk/s5", "status": "failed",
+              "exit_code": 1, "gestart": "2026-08-28T11:39:00Z", "duur_s": 420.0,
+              "beurten": 29, "tools": {"Read": 8, "Bash": 7, "Write": 1},
+              "geschreven": ["prijs.py"], "cleanup": None, "transcript": "/x/s.jsonl",
+              "rood": ["de poort heeft nooit gedraaid — er is niets gecontroleerd"]}]
+    h = controlroom.runs_html(rijen)
+    assert "Systeem 5" in h
+    assert "de poort heeft nooit gedraaid" in h, "de reden moet woordelijk op de pagina staan"
+    assert "29" in h and "Write" in h
+
+
+def test_de_pagina_meet_niet_zelf():
+    bron = Path(controlroom.__file__).read_text(encoding="utf-8")
+    assert "subprocess" not in bron, "controlroom.py mag niet meten"
 
 
 if __name__ == "__main__":

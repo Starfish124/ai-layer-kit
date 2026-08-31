@@ -30,6 +30,7 @@ import bewaking
 import flow
 import live
 import meet
+import waarneming
 
 PORT = 7415   # vrij van 7350/7360/7411/7455/8420/8765/8766
 
@@ -272,6 +273,64 @@ def html(m):
                                 "systemen_totaal", "grenzen_rood", "beslissingen")})
 
 
+RUNS_PAGE = """<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runs — controlekamer</title>
+<style>
+  :root {{ --teal:#009b8f; --danger:#cf3f3a; --good:#1d7d43; --mute:#6b7280;
+          --lijn:#e5e7eb; --grond:#fbfbfa; }}
+  body {{ font:15px/1.5 -apple-system,system-ui,sans-serif; background:var(--grond);
+         color:#111; margin:0; padding:2rem; max-width:60rem; }}
+  a {{ color:var(--teal); }}
+  .kaart {{ border:1px solid var(--lijn); border-left:4px solid var(--mute);
+           border-radius:6px; background:#fff; padding:.6rem .9rem; margin:.5rem 0; }}
+  .kaart.rood {{ border-left-color:var(--danger); }}
+  .kaart.groen {{ border-left-color:var(--good); }}
+  .kaart.grijs {{ border-left-color:var(--mute); }}
+  summary {{ cursor:pointer; }}
+  .meta, .mute {{ color:var(--mute); font-size:.88em; }}
+  ul.rood {{ color:var(--danger); margin:.4rem 0 0 1rem; padding:0; }}
+</style>
+</head>
+<body>
+<p class=meta><a href="/">← controlekamer</a> · <a href="/flow">stroom</a></p>
+{inhoud}
+</body>
+</html>
+"""
+
+
+def runs_html(rijen):
+    """Eén regel per agentrun: wat hij deed, en waarom hij rood is."""
+    kop = ("<h1>Runs</h1><p class=meta>Wat elke agentrun deed — "
+           "gemeten aan zijn transcript, niet aan zijn exitgetal.</p>")
+    if not rijen:
+        return RUNS_PAGE.format(inhoud=kop + "<p>Geen runs in Vibe Kanban.</p>")
+    blokken = []
+    for r in rijen:
+        lamp = "rood" if r["rood"] else ("grijs" if r["beurten"] is None else "groen")
+        tools = ", ".join(f"{esc(k)} {v}" for k, v in sorted(r["tools"].items())) or "—"
+        duur = f"{r['duur_s'] / 60:.1f} min" if r.get("duur_s") else "—"
+        redenen = "".join(f"<li>{esc(x)}</li>" for x in r["rood"])
+        blokken.append(
+            f"<details class='kaart {lamp}'><summary>"
+            f"<b>{esc(r['workspace'])}</b> · {esc(r['status'] or '—')} "
+            f"exit {r['exit_code']} · "
+            f"{r['beurten'] if r['beurten'] is not None else '?'} beurten · "
+            f"{len(r['geschreven'])} bestanden</summary>"
+            f"<p class=meta>tak {esc(r['branch'] or '—')} · "
+            f"gestart {esc(r['gestart'] or '—')} · {duur}</p>"
+            f"<p>tools: {tools}</p>"
+            f"<p>geschreven: {esc(', '.join(r['geschreven'])) or 'niets'}</p>"
+            f"<p>poort: {esc(str(r['cleanup'])) if r['cleanup'] else 'niet gedraaid'}</p>"
+            + (f"<ul class=rood>{redenen}</ul>" if redenen else "")
+            + "</details>")
+    return RUNS_PAGE.format(inhoud=kop + "".join(blokken))
+
+
 # ── de stroom: het canvas (React Flow, gebouwd in web/dist) ──────────────────
 # `npm run build` in web/ levert dist/; die staat in git, zodat deze server geen
 # Node nodig heeft. Alles wat het canvas toont komt uit /flow.json en /events.
@@ -494,6 +553,9 @@ def serve(manifest_pad, port=PORT, overrides=None):
                 body = json.dumps(flow.stroom(meet.laad(manifest_pad, overrides), module, run),
                                   ensure_ascii=False).encode()
                 ctype = "application/json"
+            elif u.path == "/runs":
+                body = runs_html(waarneming.runs(meet.laad(manifest_pad, overrides))).encode()
+                ctype = "text/html; charset=utf-8"
             elif u.path in ("/", "/meet.json"):
                 m = meet.meet(meet.laad(manifest_pad, overrides), run_tests=run)
                 body = (json.dumps(m, ensure_ascii=False, indent=2) if u.path == "/meet.json"
@@ -544,6 +606,8 @@ if __name__ == "__main__":
         uit, code = xy(meet.meet(meet.laad(manifest, ov), run_tests="--run" in args))
         print(json.dumps(uit, ensure_ascii=False))
         sys.exit(code)
+    elif "--runs" in args:
+        print(runs_html(waarneming.runs(meet.laad(manifest, ov))))
     elif "--tally" in args:
         naam = args[args.index("--tally") + 1]
         v = meet.meet(meet.laad(manifest, ov), run_tests="--run" in args)["samenvatting"][naam]
