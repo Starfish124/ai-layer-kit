@@ -11,6 +11,7 @@ Meet, bewaart niets. Elke weergave is een verse meting.
 
 import json
 import re
+import sqlite3
 from pathlib import Path
 
 PROJECTS = Path.home() / ".claude/projects"
@@ -60,3 +61,55 @@ def _duur(tijden):
         return None
     stempels = sorted(datetime.fromisoformat(t.replace("Z", "+00:00")) for t in tijden)
     return (stempels[-1] - stempels[0]).total_seconds()
+
+
+VK_DB = Path.home() / "Library/Application Support/ai.bloop.vibe-kanban/db.v2.sqlite"
+
+VRAAG = """
+select w.name, w.branch, w.container_ref, r.name repo, r.path repo_pad, s.agent_working_dir,
+       p.run_reason, p.status, p.exit_code, p.started_at
+from workspaces w
+join workspace_repos wr on wr.workspace_id = w.id
+join repos r on r.id = wr.repo_id
+join sessions s on s.workspace_id = w.id
+join execution_processes p on p.session_id = s.id
+where w.archived = 0 and w.worktree_deleted = 0
+order by p.started_at
+"""
+
+
+def runs(m, vk_db=VK_DB, projects=PROJECTS):
+    """Eén rij per VK-workspace: de agentrun, de poort, en wat het transcript zegt."""
+    if not Path(vk_db).exists():
+        return []
+    con = sqlite3.connect(f"file:{vk_db}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    rijen = con.execute(VRAAG).fetchall()
+    con.close()
+
+    uit = {}
+    for r in rijen:
+        naam = r["name"] or r["branch"]
+        w = uit.setdefault(naam, {
+            "workspace": naam, "branch": r["branch"], "repo": r["repo"],
+            "repo_pad": r["repo_pad"],
+            "worktree": str(Path(r["container_ref"]) / r["agent_working_dir"])
+                        if r["container_ref"] else None,
+            "status": None, "exit_code": None, "gestart": None, "cleanup": None})
+        if r["run_reason"] == "codingagent":
+            w.update(status=r["status"], exit_code=r["exit_code"], gestart=r["started_at"])
+        elif r["run_reason"] == "cleanupscript":
+            w["cleanup"] = (r["status"], r["exit_code"])
+
+    for w in uit.values():
+        w.update(transcript=None, beurten=None, tools={}, geschreven=[], duur_s=None)
+        if not w["worktree"]:
+            continue
+        sessies = sorted(transcriptmap(Path(w["worktree"]), projects).glob("*.jsonl")) \
+            if transcriptmap(Path(w["worktree"]), projects).is_dir() else []
+        if not sessies:
+            continue
+        # Meerdere sessies in één worktree: de laatste is de run die telt.
+        w["transcript"] = str(sessies[-1])
+        w.update(leest_transcript(sessies[-1]))
+    return sorted(uit.values(), key=lambda w: w["gestart"] or "")

@@ -4,6 +4,7 @@
 """
 
 import json
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -53,6 +54,68 @@ def test_een_kapotte_regel_kost_geen_meting():
     pad.parent.mkdir(parents=True, exist_ok=True)
     pad.write_text('{"type":"assistant"\nnog kapotter\n', encoding="utf-8")
     assert waarneming.leest_transcript(pad)["beurten"] == 0
+
+
+SCHEMA = """
+create table repos (id text primary key, name text, path text);
+create table workspaces (id text primary key, name text, branch text,
+                         container_ref text, archived int, worktree_deleted int);
+create table workspace_repos (workspace_id text, repo_id text);
+create table sessions (id text primary key, workspace_id text, agent_working_dir text);
+create table execution_processes (id text primary key, session_id text, run_reason text,
+                                  status text, exit_code int, started_at text);
+"""
+
+
+def _vk_db(pad, container, agent=("completed", 0), cleanup=("completed", 0)):
+    con = sqlite3.connect(pad)
+    con.executescript(SCHEMA)
+    con.execute("insert into repos values ('r1','stride-durabo','/repo')")
+    con.execute("insert into workspaces values ('w1','Systeem 5','vk/s5',?,0,0)",
+                (str(container),))
+    con.execute("insert into workspace_repos values ('w1','r1')")
+    con.execute("insert into sessions values ('s1','w1','systemen')")
+    con.execute("insert into execution_processes values "
+                "('p1','s1','codingagent',?,?,'2026-08-28T11:39:00Z')", agent)
+    if cleanup:
+        con.execute("insert into execution_processes values "
+                    "('p2','s1','cleanupscript',?,?,'2026-08-28T11:50:00Z')", cleanup)
+    con.commit()
+    con.close()
+
+
+def test_een_run_koppelt_zijn_worktree_aan_zijn_transcript():
+    hier = TMP / "vk1"
+    hier.mkdir(parents=True, exist_ok=True)
+    container = hier / "worktrees"
+    worktree = container / "systemen"
+    worktree.mkdir(parents=True)
+    projects = hier / "projects"
+    _transcript(waarneming.transcriptmap(worktree, projects) / "s.jsonl", [
+        _beurt("2026-08-28T11:39:00.000Z", [_tool("Write", file_path="prijs.py")]),
+        _beurt("2026-08-28T11:40:00.000Z", [_tool("Bash", command="ls")]),
+    ])
+    _vk_db(hier / "db.sqlite", container)
+
+    r = waarneming.runs({"repos": {"systemen": Path("/repo")}},
+                        vk_db=hier / "db.sqlite", projects=projects)
+    assert len(r) == 1, r
+    assert r[0]["workspace"] == "Systeem 5"
+    assert r[0]["exit_code"] == 0
+    assert r[0]["cleanup"] == ("completed", 0)
+    assert r[0]["geschreven"] == ["prijs.py"], r[0]
+    assert r[0]["beurten"] == 2
+
+
+def test_zonder_transcript_is_de_run_onbekend_geen_fout():
+    hier = TMP / "vk2"
+    hier.mkdir(parents=True, exist_ok=True)
+    (hier / "worktrees" / "systemen").mkdir(parents=True)
+    _vk_db(hier / "db.sqlite", hier / "worktrees")
+    r = waarneming.runs({"repos": {"systemen": Path("/repo")}},
+                        vk_db=hier / "db.sqlite", projects=hier / "leeg")
+    assert r[0]["transcript"] is None, r[0]
+    assert r[0]["beurten"] is None, r[0]
 
 
 if __name__ == "__main__":
