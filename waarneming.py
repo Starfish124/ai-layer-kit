@@ -55,7 +55,7 @@ def leest_transcript(pad):
                 if naam in SCHRIJFTOOLS and pad_ and pad_ not in geschreven:
                     geschreven.append(pad_)
     return {"beurten": beurten, "tools": tools, "geschreven": geschreven,
-            "duur_s": _duur(tijden)}
+            "duur_s": _duur(tijden), "tijden": tijden}
 
 
 def _duur(tijden):
@@ -88,15 +88,7 @@ def _aggregeer_sessies(paden):
         for bestand in t["geschreven"]:
             if bestand not in geschreven_totaal:
                 geschreven_totaal.append(bestand)
-        # Verzamel alle timestamps voor cross-session duur
-        with Path(pad).open(encoding="utf-8") as f:
-            for regel in f:
-                try:
-                    d = json.loads(regel)
-                    if d.get("timestamp"):
-                        alle_tijden.append(d["timestamp"])
-                except ValueError:
-                    continue
+        alle_tijden.extend(t["tijden"])
 
     duur = _duur(alle_tijden)
     return {"beurten": beurten_totaal, "tools": tools_totaal, "geschreven": geschreven_totaal,
@@ -133,7 +125,7 @@ def runs(m, vk_db=VK_DB, projects=PROJECTS):
             "workspace": naam, "branch": r["branch"], "repo": r["repo"],
             "repo_pad": r["repo_pad"],
             "worktree": str(Path(r["container_ref"]) / r["agent_working_dir"])
-                        if r["container_ref"] else None,
+                        if r["container_ref"] and r["agent_working_dir"] else None,
             "status": None, "exit_code": None, "gestart": None, "cleanup": None})
         if r["run_reason"] == "codingagent":
             w.update(status=r["status"], exit_code=r["exit_code"], gestart=r["started_at"])

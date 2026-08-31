@@ -136,7 +136,7 @@ def test_zonder_transcript_is_de_run_onbekend_geen_fout():
     assert r[0]["beurten"] is None, r[0]
 
 
-def test_meerdere_sessies_worden_gea_gregeerd_niet_willekeurig_gek_ozen():
+def test_meerdere_sessies_worden_geaggregeerd_niet_willekeurig_gekozen():
     # Test dat aggregeert TWO sessions, met UUIDs die alfabetisch tegengesteld sorteren
     # aan hun chronologische volgorde. De oude code zou willekeurig een kiezen.
     hier = TMP / "vk3"
@@ -162,7 +162,7 @@ def test_meerdere_sessies_worden_gea_gregeerd_niet_willekeurig_gek_ozen():
     r = waarneming.runs({"repos": {"systemen": Path("/repo")}},
                         vk_db=hier / "db.sqlite", projects=projects)
     assert len(r) == 1, r
-    # Beide sessions moeten gea_gregeerd zijn
+    # Beide sessions moeten geaggregeerd zijn
     assert r[0]["beurten"] == 4, f"Verwacht 4 beurten (2+2), kreeg {r[0]['beurten']}"
     assert r[0]["sessies"] == 2, f"Verwacht 2 sessies, kreeg {r[0]['sessies']}"
     # Geschreven bestanden uit beide sessions
@@ -172,6 +172,39 @@ def test_meerdere_sessies_worden_gea_gregeerd_niet_willekeurig_gek_ozen():
     assert r[0]["tools"]["Write"] == 2, f"Verwacht 2 Writes, kreeg {r[0]['tools']}"
     assert r[0]["tools"]["Read"] == 1
     assert r[0]["tools"]["Bash"] == 1
+    # duur_s moet spanning van eerste tot laatste timestamp ACROSS all sessions: 11:39:00 tot 11:42:00 = 180 seconden
+    assert r[0]["duur_s"] == 180.0, f"Verwacht 180.0 seconden (11:39 tot 11:42), kreeg {r[0]['duur_s']}"
+
+
+def test_null_agent_working_dir_geeft_geen_exception():
+    # Constraint: NULL agent_working_dir mag geen TypeError geven; run komt grijs terug
+    hier = TMP / "vk4"
+    hier.mkdir(parents=True, exist_ok=True)
+    container = hier / "worktrees"
+    worktree = container / "systemen"
+    worktree.mkdir(parents=True)
+
+    # Voeg rij in met NULL agent_working_dir
+    con = sqlite3.connect(hier / "db.sqlite")
+    con.executescript(SCHEMA)
+    con.execute("insert into repos values ('r1','stride-durabo','/repo')")
+    con.execute("insert into workspaces values ('w1','Systeem Test','vk/test',?,0,0)",
+                (str(container),))
+    con.execute("insert into workspace_repos values ('w1','r1')")
+    con.execute("insert into sessions values ('s1','w1',NULL)")  # NULL agent_working_dir
+    con.execute("insert into execution_processes values "
+                "('p1','s1','codingagent','completed',0,'2026-08-28T11:39:00Z')")
+    con.commit()
+    con.close()
+
+    r = waarneming.runs({"repos": {"systemen": Path("/repo")}},
+                        vk_db=hier / "db.sqlite", projects=hier / "projects")
+    assert len(r) == 1, r
+    # Run moet grijs zijn (geen exception), met None waarden voor transcript-afhankelijke velden
+    assert r[0]["worktree"] is None, f"Verwacht worktree=None, kreeg {r[0]['worktree']}"
+    assert r[0]["transcript"] is None, r[0]
+    assert r[0]["beurten"] is None, r[0]
+    assert r[0]["sessies"] == 0, f"Verwacht sessies=0, kreeg {r[0]['sessies']}"
 
 
 if __name__ == "__main__":
