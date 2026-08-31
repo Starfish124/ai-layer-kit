@@ -284,6 +284,24 @@ def test_de_pagina_meet_niet_zelf():
     assert "subprocess" not in bron, "controlroom.py mag niet meten"
 
 
+def test_laag_zeven_staat_in_het_manifest():
+    m = json.loads((Path.home() / "durabo-platform/layers.json").read_text(encoding="utf-8"))
+    laag = [l for l in m["lagen"] if l["nr"] == 7]
+    assert laag, "laag 7 ontbreekt in layers.json"
+    assert "waarneming.py" in json.dumps(laag[0]), laag[0]
+
+
+def test_runs_html_ontsnapt_werkruimte_en_tak():
+    kwaad = "<script>alert(1)</script>"
+    rijen = [{"workspace": kwaad, "branch": kwaad, "status": "failed",
+              "exit_code": 1, "gestart": "2026-08-28T11:39:00Z", "duur_s": 60.0,
+              "beurten": 1, "tools": {}, "geschreven": [], "cleanup": None,
+              "transcript": "/x/s.jsonl", "rood": []}]
+    h = controlroom.runs_html(rijen)
+    assert "<script>alert(1)</script>" not in h, "html moet ontsnapt zijn, niet ruw"
+    assert "&lt;script&gt;" in h, "de ontsnapte vorm moet wel op de pagina staan"
+
+
 if __name__ == "__main__":
     for naam, fn in sorted(globals().items()):
         if naam.startswith("test_"):

@@ -44,7 +44,18 @@ def script(*args):
         " ".join([PY, "controlroom.py", str(MANIFEST), *args]) + "\n"
 
 
+def runs_script():
+    """Zelfde patroon als script(), maar schrijft de pagina weg — een run-overzicht is iets om te lezen."""
+    return "#!/bin/sh\nset -e\ncd " + str(KIT) + "\n" + \
+        " ".join([PY, "controlroom.py", str(MANIFEST), "--runs"]) + \
+        ' > /tmp/runs.html && echo "runs gemeten"\n'
+
+
 EVENTS = [
+    dict(title="Controlekamer · runs",
+         params={"script": runs_script()},
+         triggers=[{"type": "manual", "enabled": True}],
+         limits=[{"type": "time", "enabled": True, "duration": 600}]),
     dict(title="Controlekamer · meet (elk kwartier)",
          params={"script": script("--run", "--xy")},
          triggers=[{"type": "manual", "enabled": True}, {"type": "interval", "enabled": True, "start": int(time.time()), "duration": 900}],
