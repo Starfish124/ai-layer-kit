@@ -19,8 +19,12 @@ SCHRIJFTOOLS = ("Write", "Edit", "NotebookEdit")
 
 
 def transcriptmap(worktree, projects=PROJECTS):
-    """Claude Code codeert het werkpad als mapnaam: elke / en elke . wordt een -."""
-    return projects / re.sub(r"[/.]", "-", str(worktree))
+    """Claude Code codeert het werkpad als mapnaam: elke / en elke . wordt een -.
+
+    Het pad wordt resolved zodat /var-symlinks (macOS: /var → /private/var) matchen
+    hoe Claude Code de transcriptdirectory noemt.
+    """
+    return projects / re.sub(r"[/.]", "-", str(Path(worktree).resolve()))
 
 
 def leest_transcript(pad):
@@ -73,7 +77,6 @@ join workspace_repos wr on wr.workspace_id = w.id
 join repos r on r.id = wr.repo_id
 join sessions s on s.workspace_id = w.id
 join execution_processes p on p.session_id = s.id
-where w.archived = 0 and w.worktree_deleted = 0
 order by p.started_at
 """
 

@@ -33,6 +33,24 @@ def test_de_mapnaam_vervangt_schuine_streep_en_punt():
         Path("/p/-Users-x--config-deck")
 
 
+def test_de_mapnaam_resolve_var_symlinks_op_macos():
+    # /var is een symlink naar /private/var op macOS; transcriptmap moet dit resolven
+    # zodat het matcht met hoe Claude Code de transcriptdirectory noemt.
+    # Dit test dat een /var/folders/...-pad geresolved wordt naar -private-var-folders-.
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        link_dir = tmp_path / "link"
+        link_dir.symlink_to(real_dir)
+
+        # Link pad en resolved pad moeten dezelfde encoding produceren
+        # want resolve() brengt beide naar dezelfde echte pad
+        encoded_link = str(waarneming.transcriptmap(link_dir, tmp_path))
+        encoded_real = str(waarneming.transcriptmap(real_dir, tmp_path))
+        assert encoded_link == encoded_real, f"{encoded_link} != {encoded_real}"
+
+
 def test_het_transcript_telt_beurten_tools_en_geschreven_bestanden():
     pad = TMP / "t1" / "sessie.jsonl"
     _transcript(pad, [
