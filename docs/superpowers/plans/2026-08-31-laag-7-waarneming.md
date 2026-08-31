@@ -248,7 +248,7 @@ create table execution_processes (id text primary key, session_id text, run_reas
 def _vk_db(pad, container, agent=("completed", 0), cleanup=("completed", 0)):
     con = sqlite3.connect(pad)
     con.executescript(SCHEMA)
-    con.execute("insert into repos values ('r1','systemen','/repo')")
+    con.execute("insert into repos values ('r1','stride-durabo','/repo')")
     con.execute("insert into workspaces values ('w1','Systeem 5','vk/s5',?,0,0)",
                 (str(container),))
     con.execute("insert into workspace_repos values ('w1','r1')")
@@ -309,7 +309,7 @@ Voeg toe aan `waarneming.py` (importeer `sqlite3` bovenin):
 VK_DB = Path.home() / "Library/Application Support/ai.bloop.vibe-kanban/db.v2.sqlite"
 
 VRAAG = """
-select w.name, w.branch, w.container_ref, r.name repo, s.agent_working_dir,
+select w.name, w.branch, w.container_ref, r.name repo, r.path repo_pad, s.agent_working_dir,
        p.run_reason, p.status, p.exit_code, p.started_at
 from workspaces w
 join workspace_repos wr on wr.workspace_id = w.id
@@ -335,6 +335,7 @@ def runs(m, vk_db=VK_DB, projects=PROJECTS):
         naam = r["name"] or r["branch"]
         w = uit.setdefault(naam, {
             "workspace": naam, "branch": r["branch"], "repo": r["repo"],
+            "repo_pad": r["repo_pad"],
             "worktree": str(Path(r["container_ref"]) / r["agent_working_dir"])
                         if r["container_ref"] else None,
             "status": None, "exit_code": None, "gestart": None, "cleanup": None})
@@ -422,14 +423,14 @@ def _git_repo(pad, bestanden):
 
 def test_nul_geschreven_bestanden_is_rood():
     run = {"geschreven": [], "cleanup": ("completed", 0), "status": "completed",
-           "worktree": None, "repo": "systemen", "transcript": "x"}
+           "worktree": None, "repo_pad": None, "transcript": "x"}
     assert any("geen enkel bestand" in r for r in waarneming.oordeel(run, {})), \
         waarneming.oordeel(run, {})
 
 
 def test_een_poort_die_nooit_draaide_is_rood():
     run = {"geschreven": ["a.py"], "cleanup": None, "status": "completed",
-           "worktree": None, "repo": "systemen", "transcript": "x"}
+           "worktree": None, "repo_pad": None, "transcript": "x"}
     assert any("poort" in r for r in waarneming.oordeel(run, {})), waarneming.oordeel(run, {})
 
 
@@ -441,10 +442,18 @@ def test_een_verdwenen_test_is_rood():
     tak.mkdir(parents=True, exist_ok=True)
     (tak / "test_prijs.py").write_text("def test_iets_anders():\n    pass\n", encoding="utf-8")
     run = {"geschreven": ["test_prijs.py"], "cleanup": ("completed", 0),
-           "status": "completed", "worktree": str(tak), "repo": "systemen",
+           "status": "completed", "worktree": str(tak), "repo_pad": str(hoofd),
            "transcript": "x"}
     r = waarneming.oordeel(run, {"systemen": hoofd})
     assert any("test_geen_enkele_waarde_wordt_verzonnen" in x for x in r), r
+
+
+def test_de_repo_wordt_op_pad_gekoppeld_niet_op_naam():
+    """VK noemt hem stride-durabo, layers.json noemt hem systemen — pad is de koppeling."""
+    hoofd = _git_repo(TMP / "koppel" / "hoofd", {"test_a.py": "def test_a():\n    pass\n"})
+    run = {"repo_pad": str(hoofd), "repo": "stride-durabo"}
+    assert waarneming._hoofdrepo(run, {"systemen": hoofd}) is not None
+    assert waarneming._hoofdrepo({"repo_pad": "/bestaat/niet"}, {"systemen": hoofd}) is None
 
 
 def test_een_schone_run_is_groen():
@@ -453,7 +462,7 @@ def test_een_schone_run_is_groen():
     tak.mkdir(parents=True, exist_ok=True)
     (tak / "test_prijs.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
     run = {"geschreven": ["test_prijs.py"], "cleanup": ("completed", 0),
-           "status": "completed", "worktree": str(tak), "repo": "systemen",
+           "status": "completed", "worktree": str(tak), "repo_pad": str(hoofd),
            "transcript": "x"}
     assert waarneming.oordeel(run, {"systemen": hoofd}) == []
 ```
@@ -485,6 +494,23 @@ def _in_main(repo, bestand):
     return r.stdout if r.returncode == 0 else None
 
 
+def _hoofdrepo(run, repos):
+    """De hoofdrepo bij deze run, gekoppeld op pad.
+
+    Op naam koppelen gaat stuk: Vibe Kanban noemt de repo `stride-durabo`, layers.json
+    noemt hem `systemen`. Dan vindt `repos.get(...)` niets en zwijgt regel 3 voorgoed —
+    groen omdat er niet gekeken is.
+    """
+    if not run.get("repo_pad"):
+        return None
+    p = Path(run["repo_pad"]).expanduser().resolve()
+    for pad in repos.values():
+        q = Path(pad).expanduser()
+        if q.resolve() == p:
+            return q
+    return None
+
+
 def oordeel(run, repos):
     """Wat er mis is met deze run. Lege lijst = groen; onmeetbaar = geen oordeel."""
     rood = []
@@ -493,7 +519,7 @@ def oordeel(run, repos):
     if run["status"] in ("completed", "failed") and run["cleanup"] is None:
         rood.append("de poort heeft nooit gedraaid — er is niets gecontroleerd")
 
-    hoofd = repos.get(run["repo"])
+    hoofd = _hoofdrepo(run, repos)
     tak = Path(run["worktree"]) if run["worktree"] else None
     if hoofd and tak and tak.is_dir():
         for naam in run["geschreven"]:
