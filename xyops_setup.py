@@ -329,6 +329,127 @@ def trend_workflow(cfg, er_al):
     print(f"(her)aangemaakt: {TREND_TITEL} ({len(nodes)} knopen) {d.get('id','')}")
 
 
+SALES_TITEL = "Durabo systeem 3 · Sales Support"
+SYSTEMEN_REPO = Path.home() / "stride-durabo"
+SJABLONEN = Path.home() / "Downloads/Sales Support - AI"
+
+
+def sales_script(body):
+    return "#!/bin/sh\nset -e\ncd " + str(SYSTEMEN_REPO) + "\n" + body
+
+
+def sales_workflow(cfg, er_al):
+    """Systeem 3 apart, want het is het eerste systeem dat gebouwd wordt.
+
+    De Stroom meet alle twaalf systemen in één beeld; dat is het goede beeld zolang
+    je niets aan het bouwen bent. Voor het systeem waar deze weken aan gewerkt wordt
+    wil je iets anders zien dan groen of rood: hoeveel van een klantblad wij
+    werkelijk kunnen vullen. Dat is één getal per klant, en het beweegt zodra
+    iemand een koppeling schrijft of een klant zijn sjabloon bijwerkt.
+
+    Drie metingen, en ze meten drie verschillende dingen:
+
+    * **grens** — dezelfde systeemcontrole als in de Stroom: imports, schrijven,
+      netwerk, klok, eigen test. Rood is hier een bouwfout, geen bevinding.
+    * **sjablonen** — wat de klanten werkelijk vragen, gelezen uit hun eigen .xlsx.
+      Een nieuw bestand in de map is meteen zichtbaar; dat is precies wat Paula
+      deze weken stuurt.
+    * **koppeling** — per klant: hoeveel kolommen, hoeveel verplicht, hoeveel al
+      gekoppeld. Het verschil tussen die laatste twee is de menselijke keten uit
+      ADR-014, en dat verschil hoort gemeten te worden in plaats van geschat.
+
+    De achterstand aan het eind draait op fixtures. Dat staat er ook bij, want een
+    getal over fixtures dat voor een getal over Durabo wordt aangezien is erger dan
+    geen getal.
+    """
+    nodes = [
+        {"id": "ntrigman", "type": "trigger", "x": 40, "y": 240},
+        {"id": "ntrigdag", "type": "trigger", "x": 40, "y": 360},
+        {"id": "nnote", "type": "note", "x": 20, "y": 20, "data": {"wide": True, "body":
+            "**Systeem 3 alleen — het systeem dat nu gebouwd wordt.**\n\n"
+            "`grens` is de bouwcontrole: rood betekent dat `format.py` iets doet wat het "
+            "niet mag, niet dat er iets mis is bij Durabo.\n\n"
+            "`sjablonen` leest de klantbladen uit `~/Downloads/Sales Support - AI` zoals ze "
+            "binnenkomen; `koppeling` zegt per klant hoeveel van die kolommen wij vandaag "
+            "kunnen vullen. Dat tweede getal is de eerlijke maat voor dit systeem: de rest "
+            "wacht op een inkoper die het bij de fabriek opvraagt (ADR-014).\n\n"
+            "De achterstand onderaan draait op **fixtures**, niet op een artikelstam."}},
+        {"id": "ngrens", "type": "job", "x": 330, "y": 300,
+         "data": {"label": "Grens · imports, schrijven, netwerk, klok, test", "icon": "",
+                  "category": "general", "targets": ["main"], "algo": "random",
+                  "plugin": "shellplug",
+                  "params": {"script": script("--systeem", "format"), "annotate": False}}},
+        {"id": "nsjablonen", "type": "job", "x": 700, "y": 200,
+         "data": {"label": "Sjablonen · wat de klanten werkelijk vragen", "icon": "",
+                  "category": "general", "targets": ["main"], "algo": "random",
+                  "plugin": "shellplug",
+                  "params": {"script": sales_script(
+                      PY + " - <<'EOF'\n"
+                      "from pathlib import Path\n"
+                      "import sjabloon\n"
+                      "map_ = Path(" + repr(str(SJABLONEN)) + ")\n"
+                      "bestanden = sorted(f for f in map_.glob('*.xlsx')\n"
+                      "                   if not f.name.startswith('~$'))\n"
+                      "if not bestanden:\n"
+                      "    raise SystemExit('geen sjablonen in ' + str(map_))\n"
+                      "for f in bestanden:\n"
+                      # een .xlsb onder een .xlsx-naam mag de hele lijst niet stoppen
+                      "    try:\n"
+                      "        bladen = sjabloon.lees_sjabloon(f)\n"
+                      "    except sjabloon.Onleesbaar as e:\n"
+                      "        print(f'{f.name}: ONLEESBAAR \\u2014 {e}')\n"
+                      "        continue\n"
+                      "    kol = [k for b in bladen for k in b['kolommen']]\n"
+                      # een Artikelpass is geen tabel maar een formulier; 0 kolommen
+                      # betekent daar niet 'leeg' maar 'label links, veld ernaast'
+                      "    form = sum(1 for b in bladen if b['vorm'] == 'formulier')\n"
+                      "    print(f\"{f.name}: {len(bladen)} bladen, {len(kol)} kolommen, \"\n"
+                      "          f\"{sum(1 for k in kol if k['verplicht'])} verplicht\"\n"
+                      "          + (f', {form} als formulier' if form else ''))\n"
+                      "EOF\n"), "annotate": True}}},
+        {"id": "nkoppeling", "type": "job", "x": 700, "y": 400,
+         "data": {"label": "Koppeling · hoeveel kolommen kunnen wij vullen", "icon": "",
+                  "category": "general", "targets": ["main"], "algo": "random",
+                  "plugin": "shellplug",
+                  "params": {"script": sales_script(
+                      # regel voor regel, niet op spaties: een klantnaam mag er een bevatten
+                      PY + " -c \"import format; print(chr(10).join(format.KOPPELING))\""
+                      " | while IFS= read -r k; do\n"
+                      "  " + PY + " format.py --formaat \"$k\" | head -1\n"
+                      "done\n"), "annotate": True}}},
+        {"id": "njoin", "type": "controller", "x": 1030, "y": 300,
+         "data": {"controller": "join"}},
+        {"id": "nachterstand", "type": "job", "x": 1300, "y": 300,
+         "data": {"label": "Achterstand op fixtures (geen Durabo-getal)", "icon": "",
+                  "category": "general", "targets": ["main"], "algo": "random",
+                  "plugin": "shellplug",
+                  "params": {"script": sales_script(PY + " format.py | head -14\n"),
+                             "annotate": True}}},
+    ]
+    conns = [
+        {"id": "ctm", "source": "ntrigman", "dest": "ngrens"},
+        {"id": "ctd", "source": "ntrigdag", "dest": "ngrens"},
+        # Meten wat een module vult terwijl diezelfde module zijn eigen test niet
+        # haalt, levert een getal op dat nergens over gaat.
+        {"id": "cgs", "source": "ngrens", "dest": "nsjablonen", "condition": "success"},
+        {"id": "cgk", "source": "ngrens", "dest": "nkoppeling", "condition": "success"},
+        {"id": "cjs", "source": "nsjablonen", "dest": "njoin", "condition": "complete"},
+        {"id": "cjk", "source": "nkoppeling", "dest": "njoin", "condition": "complete"},
+        {"id": "cja", "source": "njoin", "dest": "nachterstand"},
+    ]
+    body = {"title": SALES_TITEL, "type": "workflow", "enabled": True, "category": "general",
+            "targets": ["main"], "algo": "random",
+            "triggers": [{"id": "ntrigman", "type": "manual", "enabled": True},
+                         {"id": "ntrigdag", "type": "schedule", "enabled": True,
+                          "hours": [8], "minutes": [20], "timezone": "Europe/Amsterdam"}],
+            "workflow": {"nodes": nodes, "connections": conns},
+            "limits": [{"type": "time", "enabled": True, "duration": 900}]}
+    if SALES_TITEL in er_al:
+        api(cfg, "delete_event", {"id": er_al[SALES_TITEL]["id"]})
+    d = api(cfg, "create_event", body)
+    print(f"(her)aangemaakt: {SALES_TITEL} ({len(nodes)} knopen) {d.get('id','')}")
+
+
 def main():
     _canonieke_checkout()
     if not CFG.exists():
@@ -351,6 +472,7 @@ def main():
     workflow(cfg, bestaande(cfg))
     stroom_workflow(cfg, bestaande(cfg))
     trend_workflow(cfg, bestaande(cfg))
+    sales_workflow(cfg, bestaande(cfg))
 
 
 if __name__ == "__main__":
