@@ -200,6 +200,39 @@ def vreemde_permissies(repos, toegestaan):
     return uit
 
 
+def bron_status(systeem, repo):
+    """Heeft dit systeem zijn eigen bron ooit werkelijk gezien?
+
+    De vier controles hieronder lezen de code. Deze leest het enige wat de code niet
+    over zichzelf kan zeggen: of de gegevens waar hij aan bindt ooit naast de
+    werkelijkheid zijn gelegd. Systeem 12 zag zijn blad pas na twaalf weken, en het
+    weerlegde toen drie aannames — waarvan er twee na het bouwen van de tabel niet
+    meer te herstellen waren geweest.
+
+    Drie toestanden, dezelfde als bij `audit_status()`: gemeten en goed, gemeten en
+    mis, of **nooit gemeten** — en dat laatste is grijs en niet groen. Elk
+    `*_fixtures.py` zegt in zijn eerste alinea dat hij voorlopig is; tot een meting
+    dat weerspreekt blijft hij dat.
+
+    Het verslag komt uit `bronmetingen.json` in de repo van het systeem, geschreven
+    door `bronmeting.py`. Bevindingen maken rood; opmerkingen niet — die zijn gemeten
+    en waar, maar het systeem hoort ermee om te gaan.
+    """
+    verslag = repo / "bronmetingen.json"
+    if not verslag.exists():
+        return {"ok": None, "bewijs": "nooit gemeten"}
+    try:
+        alles = json.loads(verslag.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {"ok": None, "bewijs": f"verslag onleesbaar: {type(e).__name__}"}
+    m = alles.get(systeem["module"])
+    if not m:
+        return {"ok": None, "bewijs": "nooit gemeten"}
+    if m.get("ok"):
+        return {"ok": True, "bewijs": f"{m.get('gemeten_op', '?')} · {m.get('bron', '')}"}
+    return {"ok": False, "bewijs": "; ".join(m.get("bevindingen") or [])[:400]}
+
+
 def grens_status(systeem, repos):
     """Twee controles op de code van één systeem, elk met het bewijs erbij als hij faalt."""
     repo = repos[systeem["repo"]]
@@ -226,11 +259,19 @@ def grens_status(systeem, repos):
         # antwoord op dezelfde invoer — en dan is het geen regelmotor meer.
         fout = _prefix_treffers(boom, KLOK_PREFIX)
         controles["klokvrij"] = {"ok": not fout, "bewijs": "; ".join(fout)}
+
+        # De enige controle die niet in de code te lezen is: is de bron ooit gezien.
+        controles["bron_gemeten"] = bron_status(systeem, repo)
     else:
-        for naam in ("imports", "schrijft_niet", "klokvrij"):
+        for naam in ("imports", "schrijft_niet", "klokvrij", "bron_gemeten"):
             controles[naam] = {"ok": None, "bewijs": "nog geen code"}
 
-    alles_ok = all(c["ok"] is not False for c in controles.values())
+    # `ok` gaat over de grenzen van de code, en die voedt het alarm (ADR-006: alarm op
+    # grenzen_rood). Een bevinding over de bron hoort daar niet in: dat is meestal een
+    # kapotte formule in iemands werkmap, en dat is een waarschuwing en geen "stop de
+    # lijn". Het kaartlampje toont hem wel — daar kijkt een mens.
+    grenzen = {k: c for k, c in controles.items() if k != "bron_gemeten"}
+    alles_ok = all(c["ok"] is not False for c in grenzen.values())
     return {**systeem, "gebouwd": gebouwd, "controles": controles, "ok": alles_ok}
 
 

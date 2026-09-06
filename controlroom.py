@@ -80,7 +80,8 @@ def _laag(l):
 CONTROLE_NAAM = {"imports": "geen verboden import",
                  "schrijft_niet": "schrijft nergens",
                  "netwerkvrij": "geen netwerk",
-                 "klokvrij": "geen klok, geen locale"}
+                 "klokvrij": "geen klok, geen locale",
+                 "bron_gemeten": "bron gemeten"}
 
 
 def _systeem(s):
@@ -88,7 +89,18 @@ def _systeem(s):
         _pil(CONTROLE_NAAM[k], _vinkje(c["ok"]))
         + (f' <span class="citaat">“{esc(c["bewijs"])}”</span>' if c["ok"] is False else "")
         for k, c in s["controles"].items())
-    lamp = "niet gebouwd" if not s["gebouwd"] else ("groen" if s["ok"] else "rood")
+    # Groen betekende hier "de code houdt zich aan zijn grenzen", en werd gelezen als
+    # "dit systeem klopt". Een systeem dat zijn bron nooit gezien heeft is gebouwd en
+    # ongetest — de gele lamp die daar al voor bestond — en niet groen.
+    bron = s["controles"].get("bron_gemeten", {}).get("ok")
+    if not s["gebouwd"]:
+        lamp = "niet gebouwd"
+    elif not s["ok"] or bron is False:
+        lamp = "rood"
+    elif bron is True:
+        lamp = "groen"
+    else:
+        lamp = "gebouwd, ongetest"
     return (f'<details class="kaart"><summary><span class="nr">{s["nr"]}</span>'
             f'<span class="naam">{esc(s["naam"])}</span>'
             f'<span class="wie"><code>{esc(s["module"])}.py</code> · {esc(s["repo"])}</span>'
@@ -445,6 +457,15 @@ def xy(m):
                     for t in m["tests"] if t["groen"] is False]
     waarschuwing += [f"sonde niet uitvoerbaar: {a['naam']} — {a['uitvoer']}"
                      for a in m["audits"] if a["ok"] is None]
+    # De bron is geen codegrens: een bevinding erover waarschuwt, en een systeem dat
+    # zijn bron nooit zag waarschuwt ook — dat laatste is de stille meerderheid.
+    waarschuwing += [f"bron wijkt af: {s['naam']} — {s['controles']['bron_gemeten']['bewijs'][:120]}"
+                     for s in m["systemen"]
+                     if s["controles"].get("bron_gemeten", {}).get("ok") is False]
+    nooit = [s["naam"] for s in m["systemen"]
+             if s["gebouwd"] and s["controles"].get("bron_gemeten", {}).get("ok") is None]
+    if nooit:
+        waarschuwing.append(f"bron nooit gemeten ({len(nooit)}): " + ", ".join(nooit))
     uit = {
         "xy": True,
         "data": {**{k: (int(v) if isinstance(v, bool) else v) for k, v in sam.items()

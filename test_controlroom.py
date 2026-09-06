@@ -52,7 +52,9 @@ def test_xy_regel_is_geldig_en_exit_volgt_rood():
     assert uit["xy"] is True and code == 1
     assert json.loads(json.dumps(uit))["data"]["grenzen_rood"] == 2
     assert "smtplib" in uit["markdown"] and "test rood: test_bad.py" in uit["markdown"]
-    assert uit["warning"].startswith("3 waarschuwing")   # test_bad + sonde + weg
+    # test_bad + sonde + weg + de systemen die hun bron nooit zagen
+    assert uit["warning"].startswith("4 waarschuwing")
+    assert "bron nooit gemeten (3)" in uit["markdown"]
     assert any(r[2] == "groen" for r in uit["table"]["rows"])
     assert live.EVENTS.exists() and "meting" in live.EVENTS.read_text()
 

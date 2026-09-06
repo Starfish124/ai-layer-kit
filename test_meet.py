@@ -214,6 +214,51 @@ def test_samenvatting_telt_wat_de_pagina_toont():
     assert s["beslissingen"] == 2
 
 
+def test_een_bron_die_nooit_gemeten_is_wordt_grijs_en_niet_groen():
+    """De hele reden dat deze controle bestaat: systeem 12 stond twaalf weken op
+    groen terwijl zijn blad drie van zijn aannames weersprak. Nooit gemeten is een
+    derde toestand, net als een sonde die niet kan draaien."""
+    import json
+    repo = TMP / "bronrepo"
+    repo.mkdir(exist_ok=True)
+    systeem = {"module": "braaf", "repo": "x"}
+
+    # geen verslag: grijs
+    assert meet.bron_status(systeem, repo) == {"ok": None, "bewijs": "nooit gemeten"}
+
+    # verslag zonder dit systeem erin: ook grijs
+    verslag = repo / "bronmetingen.json"
+    verslag.write_text(json.dumps({"iemand-anders": {"ok": True}}), encoding="utf-8")
+    assert meet.bron_status(systeem, repo)["ok"] is None
+
+    # gemeten en goed: groen, met datum en bron als bewijs
+    verslag.write_text(json.dumps({"braaf": {"ok": True, "gemeten_op": "2026-09-06",
+                                             "bron": "blad.xlsx"}}), encoding="utf-8")
+    g = meet.bron_status(systeem, repo)
+    assert g["ok"] is True and "2026-09-06" in g["bewijs"] and "blad.xlsx" in g["bewijs"]
+
+    # gemeten en mis: rood, met de bevinding erbij
+    verslag.write_text(json.dumps({"braaf": {"ok": False,
+                                             "bevindingen": ["kop heet anders"]}}),
+                       encoding="utf-8")
+    r = meet.bron_status(systeem, repo)
+    assert r["ok"] is False and "kop heet anders" in r["bewijs"]
+
+    # onleesbaar verslag is grijs, niet rood: we weten het dan gewoon niet
+    verslag.write_text("{kapot", encoding="utf-8")
+    assert meet.bron_status(systeem, repo)["ok"] is None
+
+
+def test_een_ongemeten_bron_zet_geen_grens_op_rood():
+    """`grenzen_rood` voedt het alarm (ADR-006). Een kapotte formule in andermans
+    werkmap is een waarschuwing, geen "stop de lijn"."""
+    g = meet.grens_status({"module": "ok", "repo": "een", "schrijft": False,
+                           "verboden_imports": []}, {"een": TMP / "repo"})
+    assert "bron_gemeten" in g["controles"]
+    assert g["controles"]["bron_gemeten"]["ok"] is None
+    assert g["ok"] is True, "een ongemeten bron mag de grens niet rood maken"
+
+
 if __name__ == "__main__":
     try:
         for naam, fn in sorted(globals().items()):
